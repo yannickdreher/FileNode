@@ -4,6 +4,53 @@ use anyhow::{bail, Result};
 use noritec_drive::{config::Config, engine, filesystem, jmap::Remote, model::*, store::Store};
 use std::{collections::HashMap, fs, path::Path, sync::atomic::AtomicBool};
 
+#[test]
+fn idle_sync_reuses_hashes_and_does_not_rewrite_unchanged_baselines() {
+    let mut fixture = Fixture::new();
+    fixture.local("a.txt", "one");
+    let mut store = Store::open(&fixture.config).unwrap();
+    let mut scanner = noritec_drive::scanner::LocalScanner::new(fixture.folder.path(), 900);
+    for _ in 0..2 {
+        engine::sync_with_scanner(
+            &fixture.config,
+            &mut store,
+            &mut fixture.server,
+            &AtomicBool::new(false),
+            &mut |_| {},
+            &mut scanner,
+        )
+        .unwrap();
+    }
+    let writes = store.db.total_changes();
+    let report = engine::sync_with_scanner(
+        &fixture.config,
+        &mut store,
+        &mut fixture.server,
+        &AtomicBool::new(false),
+        &mut |_| {},
+        &mut scanner,
+    )
+    .unwrap();
+    assert_eq!(store.db.total_changes(), writes);
+    assert_eq!(report.uploaded + report.downloaded, 0);
+    if scanner.watching() {
+        assert_eq!(scanner.hashed_files(), 0);
+    }
+    fixture.local("a.txt", "two");
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    engine::sync_with_scanner(
+        &fixture.config,
+        &mut store,
+        &mut fixture.server,
+        &AtomicBool::new(false),
+        &mut |_| {},
+        &mut scanner,
+    )
+    .unwrap();
+    let node = fixture.server.node("a.txt");
+    assert_eq!(fixture.server.blobs[node.blob_id.as_ref().unwrap()], b"two");
+}
+
 #[derive(Default)]
 struct Server {
     nodes: Vec<Node>,

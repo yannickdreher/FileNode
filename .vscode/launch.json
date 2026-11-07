@@ -1,0 +1,60 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Drive: desktop and settings",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--locked", "--bin", "noritec-drive"],
+        "filter": {"name": "noritec-drive", "kind": "bin"}
+      },
+      "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings", "--language", "en"],
+      "cwd": "${workspaceFolder}",
+      "env": {"RUST_BACKTRACE": "1"},
+      "sourceLanguages": ["rust"],
+      "preLaunchTask": "drive: prepare debug profile"
+    },
+    {
+      "name": "Drive: background and tray",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--locked", "--bin", "noritec-drive"],
+        "filter": {"name": "noritec-drive", "kind": "bin"}
+      },
+      "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--background"],
+      "cwd": "${workspaceFolder}",
+      "env": {"RUST_BACKTRACE": "1"},
+      "sourceLanguages": ["rust"],
+      "preLaunchTask": "drive: prepare debug profile"
+    },
+    {
+      "name": "Drive: desktop without tray",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["build", "--locked", "--bin", "noritec-drive"],
+        "filter": {"name": "noritec-drive", "kind": "bin"}
+      },
+      "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings", "--no-tray"],
+      "cwd": "${workspaceFolder}",
+      "env": {"RUST_BACKTRACE": "1"},
+      "sourceLanguages": ["rust"],
+      "preLaunchTask": "drive: prepare debug profile"
+    },
+    {
+      "name": "Drive: synchronization integration tests (no account)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": {
+        "args": ["test", "--locked", "--test", "synchronization", "--no-run"],
+        "filter": {"name": "synchronization", "kind": "test"}
+      },
+      "args": ["--nocapture", "--test-threads=1"],
+      "cwd": "${workspaceFolder}",
+      "env": {"RUST_BACKTRACE": "1"},
+      "sourceLanguages": ["rust"]
+    }
+  ]
+}

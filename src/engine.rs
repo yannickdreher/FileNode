@@ -33,6 +33,19 @@ pub fn sync<R: Remote>(
     cancel: &AtomicBool,
     log: &mut dyn FnMut(Message),
 ) -> Result<Report> {
+    let mut scanner =
+        crate::scanner::LocalScanner::new(&config.local_folder, config.full_scan_seconds);
+    sync_with_scanner(config, store, remote, cancel, log, &mut scanner)
+}
+
+pub fn sync_with_scanner<R: Remote>(
+    config: &Config,
+    store: &mut Store,
+    remote: &mut R,
+    cancel: &AtomicBool,
+    log: &mut dyn FnMut(Message),
+    scanner: &mut crate::scanner::LocalScanner,
+) -> Result<Report> {
     config.validate()?;
     store::ensure_private_path(&config.local_folder)?;
     if let Some(old) = store.get_meta::<String>("account_id")? {
@@ -43,10 +56,12 @@ pub fn sync<R: Remote>(
         store.set_meta("account_id", &remote.account_id())?;
     }
     // A scan MUST finish completely before any remote mutation or deletion is planned.
-    let local = disk::scan(&config.local_folder, config.max_file_bytes)?;
+    let local = scanner.scan(config.max_file_bytes)?;
     let cache = store.get_meta::<Snapshot>("remote_snapshot")?;
     let mut snapshot = remote.snapshot(cache.as_ref())?;
-    store.set_meta("remote_snapshot", &snapshot)?;
+    if cache.as_ref().is_none_or(|old| old.state != snapshot.state) {
+        store.set_meta("remote_snapshot", &snapshot)?;
+    }
     let root_id = match store.get_meta::<String>("remote_root_id")? {
         Some(id) => {
             if !snapshot
@@ -124,15 +139,25 @@ pub fn sync<R: Remote>(
         }
         if matches!(action, Action::Accept(_)) {
             let l = expected.context("Accept requires a local entry")?;
+            let node = tree.get(&path).context("Accept requires a remote entry")?;
+            // No state transition is needed for an identical baseline. Rehashing and
+            // writing every accepted file would defeat the event-invalidated cache.
+            if base.get(&path).is_some_and(|b| {
+                &b.local == l && b.remote_id == node.id && b.remote_blob == node.blob_id
+            }) {
+                continue;
+            }
             disk::verify_local(&config.local_folder, &path, Some(l), config.max_file_bytes)?;
-            store.record(
-                &path,
-                l,
-                tree.get(&path).context("Accept requires a remote entry")?,
-            )?;
+            store.record(&path, l, node)?;
             continue;
         }
         let op = store.begin(&action)?;
+        let completed = match &action {
+            Action::Upload(_) => "log.uploaded",
+            Action::Download(_) => "log.downloaded",
+            Action::DeleteLocal(_) | Action::DeleteRemote(_) => "log.recycled",
+            _ => "log.completed",
+        };
         log(Message::new(action_label(&action)).with("path", &path));
         match action {
             Action::CreateLocalDir(_) => {
@@ -159,7 +184,7 @@ pub fn sync<R: Remote>(
                     &mut snapshot.state,
                 )?;
                 store.record(&path, expected.context("Directory is missing")?, &node)?;
-                tree.insert(path, node);
+                tree.insert(path.clone(), node);
                 report.uploaded += 1;
             }
             Action::Upload(_) => {
@@ -230,7 +255,7 @@ pub fn sync<R: Remote>(
                     )?
                 };
                 store.record(&path, expected, &node)?;
-                tree.insert(path, node);
+                tree.insert(path.clone(), node);
                 report.uploaded += 1;
             }
             Action::Download(_) | Action::Reconcile(_) => {
@@ -317,6 +342,7 @@ pub fn sync<R: Remote>(
             | Action::Blocked(_) => unreachable!(),
         }
         store.done(&op)?;
+        log(Message::new(completed).with("path", &path));
     }
     Ok(report)
 }

@@ -8,11 +8,15 @@ use url::Url;
 pub struct Config {
     pub language: crate::i18n::Language,
     pub server: String,
+    pub web_url: String,
     pub username: String,
     pub account_id: Option<String>,
     pub local_folder: PathBuf,
     pub remote_folder: String,
     pub interval_seconds: u64,
+    pub full_scan_seconds: u64,
+    pub autostart: bool,
+    pub auto_connect: bool,
     pub propagate_deletes: bool,
     pub max_delete_count: usize,
     pub max_delete_percent: usize,
@@ -28,11 +32,15 @@ impl Default for Config {
         Self {
             language: crate::i18n::Language::Auto,
             server: "https://jmap.example.com".into(),
+            web_url: "https://mail.example.com".into(),
             username: String::new(),
             account_id: None,
             local_folder: home.join("Noritec Drive"),
             remote_folder: "Noritec Drive".into(),
             interval_seconds: 30,
+            full_scan_seconds: 900,
+            autostart: false,
+            auto_connect: true,
             propagate_deletes: false,
             max_delete_count: 20,
             max_delete_percent: 25,
@@ -60,6 +68,14 @@ impl Config {
         if self.username.trim().is_empty() {
             bail!("Username is required");
         }
+        let web = Url::parse(&self.web_url).context("Invalid web client URL")?;
+        if web.scheme() != "https"
+            || web.host_str().is_none()
+            || !web.username().is_empty()
+            || web.password().is_some()
+        {
+            bail!("Web client URL must use HTTPS without embedded credentials");
+        }
         if !self.local_folder.is_absolute() || !self.local_folder.is_dir() {
             bail!("Local folder must exist and use an absolute path");
         }
@@ -69,6 +85,9 @@ impl Config {
         }
         if self.max_delete_percent > 100 || self.max_file_bytes == 0 {
             bail!("Invalid protection limits");
+        }
+        if self.full_scan_seconds < 60 || self.full_scan_seconds > 86400 {
+            bail!("Full verification interval must be between 60 and 86400 seconds");
         }
         Ok(())
     }

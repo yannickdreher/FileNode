@@ -7,3 +7,4 @@
 .cargo/
 dist/
 artifacts/
+.dev/

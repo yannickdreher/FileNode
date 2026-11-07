@@ -9,6 +9,7 @@ workflow:
 stages: [build]
 
 default:
+  interruptible: true
   image: rust:1-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57
   tags: [docker]
 
@@ -30,7 +31,7 @@ test-and-package:
       - .cargo/git/
   before_script:
     - apt-get update -qq
-    - apt-get install -y --no-install-recommends pkg-config libdbus-1-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev gcc-mingw-w64-x86-64 zip
+    - apt-get install -y --no-install-recommends pkg-config libdbus-1-dev libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libegl1-mesa-dev libgl1-mesa-dri libx11-dev libxi-dev libxcursor-dev libxrandr-dev gcc-mingw-w64-x86-64 zip xvfb xauth dbus-x11 python3-dbus python3-gi openbox imagemagick xdotool
     - rustup component add clippy rustfmt
     - rustup target add x86_64-pc-windows-gnu
     - rustc --version
@@ -40,6 +41,7 @@ test-and-package:
     - cargo test --locked --all-targets
     - cargo check --locked --no-default-features
     - cargo build --locked --release
+    - dbus-run-session -- sh scripts/desktop-smoke.sh
     - cargo build --locked --release --target x86_64-pc-windows-gnu
     - mkdir -p dist/linux-x86_64 dist/windows-x86_64
     - cp target/release/noritec-drive dist/linux-x86_64/
@@ -52,7 +54,9 @@ test-and-package:
   artifacts:
     name: "noritec-drive-$CI_COMMIT_SHORT_SHA"
     expire_in: 30 days
+    when: always
     paths:
       - dist/*.tar.gz
       - dist/*.zip
       - dist/SHA256SUMS
+      - artifacts/*.png

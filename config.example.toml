@@ -2,11 +2,15 @@
 # Never store the app password in this file.
 language = "auto" # auto, en, de
 server = "https://jmap.example.com"
+web_url = "https://mail.example.com"
 username = "user@example.org"
 # account_id = "your-file-account-id" # Only needed when discovery is ambiguous.
 local_folder = "/home/user/Noritec Drive" # Windows: 'C:\Users\user\Noritec Drive'
 remote_folder = "Noritec Drive"
 interval_seconds = 30
+full_scan_seconds = 900
+auto_connect = true
+autostart = false
 propagate_deletes = false
 max_delete_count = 20
 max_delete_percent = 25

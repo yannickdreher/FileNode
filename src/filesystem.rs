@@ -110,6 +110,13 @@ pub fn hash_file(path: &Path, max_bytes: u64) -> Result<LocalEntry> {
 }
 
 pub fn scan(root: &Path, max_bytes: u64) -> Result<LocalTree> {
+    scan_with(root, |path, _| hash_file(path, max_bytes))
+}
+
+pub(crate) fn scan_with(
+    root: &Path,
+    mut read_file: impl FnMut(&Path, &str) -> Result<LocalEntry>,
+) -> Result<LocalTree> {
     if fs::symlink_metadata(root)?.file_type().is_symlink() {
         bail!("Sync folder must not be a symbolic link");
     }
@@ -142,7 +149,7 @@ pub fn scan(root: &Path, max_bytes: u64) -> Result<LocalTree> {
                 size: 0,
             }
         } else if entry.file_type().is_file() {
-            hash_file(entry.path(), max_bytes)?
+            read_file(entry.path(), &rel)?
         } else {
             bail!("Unsupported file type: {rel}");
         };

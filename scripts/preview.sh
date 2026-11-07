@@ -10,7 +10,7 @@ sleep 1
 export DISPLAY=:99
 export LIBGL_ALWAYS_SOFTWARE=1
 for language in en de; do
-    "${CARGO_TARGET_DIR:-target}/release/noritec-drive" --language "$language" --config /tmp/noritec-drive-preview.toml > /tmp/drive-preview.log 2>&1 &
+    "${CARGO_TARGET_DIR:-target}/release/noritec-drive" --language "$language" --no-tray --settings --config /tmp/noritec-drive-preview.toml > /tmp/drive-preview.log 2>&1 &
     app_pid=$!
     sleep 3
     kill -0 "$app_pid"

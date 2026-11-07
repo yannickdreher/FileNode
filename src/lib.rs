@@ -5,4 +5,5 @@ pub mod i18n;
 pub mod jmap;
 pub mod model;
 pub mod planner;
+pub mod scanner;
 pub mod store;

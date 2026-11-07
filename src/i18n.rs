@@ -65,6 +65,12 @@ pub struct Message {
 }
 
 impl Message {
+    pub fn argument(&self, key: &str) -> Option<&str> {
+        self.arguments
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| value.as_str())
+    }
     pub fn new(key: &'static str) -> Self {
         Self {
             key,

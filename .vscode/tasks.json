@@ -1,0 +1,39 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "drive: prepare debug profile",
+      "type": "process",
+      "command": "sh",
+      "args": ["${workspaceFolder}/scripts/prepare-debug.sh"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/prepare-debug.ps1"]
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "drive: build",
+      "type": "process",
+      "command": "cargo",
+      "args": ["build", "--locked"],
+      "problemMatcher": ["$rustc"],
+      "group": {"kind": "build", "isDefault": true}
+    },
+    {
+      "label": "drive: tests",
+      "type": "process",
+      "command": "cargo",
+      "args": ["test", "--locked", "--all-targets"],
+      "problemMatcher": ["$rustc"],
+      "group": "test"
+    },
+    {
+      "label": "drive: clippy",
+      "type": "process",
+      "command": "cargo",
+      "args": ["clippy", "--locked", "--all-targets", "--", "-D", "warnings"],
+      "problemMatcher": ["$rustc"]
+    }
+  ]
+}
