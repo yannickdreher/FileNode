@@ -29,7 +29,6 @@ export async function prepare(config, context) {
   const files = await verifyArtifacts("dist", context.nextRelease.version, context.nextRelease.gitHead);
   await writeFile("dist/SHA256SUMS", files.map(file => `${file.sha256}  ${file.name}\n`).join(""));
   await writeFile("dist/BUILD-INFO.json", JSON.stringify({ version: context.nextRelease.version, commit: context.nextRelease.gitHead, files }, null, 2) + "\n");
-  context.nextRelease.notes += "\n\nThe Windows portable ZIP contains the complete desktop app and its dependencies. The MSIX is unsigned; signing or a Store identity is required for normal installation. The Linux archive requires Qt 6.4+ and a Secret Service.\n";
 }
 export async function publish(config, context) {
   return publishGitlab(gitlabConfig(context.nextRelease.version), context);

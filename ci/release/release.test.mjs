@@ -26,6 +26,7 @@ test("notes include documentation, CI and non-conventional changes", async () =>
   });
   for (const text of ["clarify setup", "update runner", "Update translations"]) assert.ok(notes.includes(text), text);
   assert.ok(notes.includes("/-/commit/"), "Release notes must link to GitLab commit pages.");
+  assert.ok(notes.includes("MSIX is unsigned"), "Package installation guidance must be part of the generated release notes.");
 });
 
 test("publishing requires both platforms, the same commit and intact binary checksums", async () => {
