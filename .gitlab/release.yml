@@ -51,7 +51,7 @@ linux-build:
     paths: [.cargo/registry/, .cargo/git/]
   before_script:
     - apt-get update -qq
-    - apt-get install -y --no-install-recommends nodejs pkg-config libdbus-1-dev cmake ninja-build g++ qt6-base-dev qt6-declarative-dev
+    - apt-get install -y --no-install-recommends nodejs pkg-config libdbus-1-dev cmake ninja-build build-essential qt6-base-dev qt6-declarative-dev
   script:
     - sh ci/package-linux.sh
   artifacts:
