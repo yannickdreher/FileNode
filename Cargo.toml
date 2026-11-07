@@ -1,0 +1,47 @@
+[package]
+name = "noritec-drive"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98"
+description = "Cross-platform desktop synchronization for Stalwart JMAP Files"
+publish = false
+
+[features]
+default = ["desktop"]
+desktop = ["dep:eframe", "dep:keyring"]
+
+[dependencies]
+anyhow = "1"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"], optional = true }
+fs2 = "0.4"
+hex = "0.4"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sys-locale = "0.3"
+tempfile = "3"
+toml = "0.8"
+unicode-normalization = "0.1"
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+zeroize = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3.6", features = ["windows-native"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"], optional = true }
+
+[dev-dependencies]
+proptest = "1"
+
+[profile.release]
+lto = "thin"
+strip = true
+

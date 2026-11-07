@@ -1,0 +1,9 @@
+/target/
+*.sqlite*
+*.part
+.env
+.noritec-drive/
+
+.cargo/
+dist/
+artifacts/

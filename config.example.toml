@@ -1,0 +1,14 @@
+# Copy to a separate profile and replace username and local_folder.
+# Never store the app password in this file.
+language = "auto" # auto, en, de
+server = "https://jmap.example.com"
+username = "user@example.org"
+# account_id = "your-file-account-id" # Only needed when discovery is ambiguous.
+local_folder = "/home/user/Noritec Drive" # Windows: 'C:\Users\user\Noritec Drive'
+remote_folder = "Noritec Drive"
+interval_seconds = 30
+propagate_deletes = false
+max_delete_count = 20
+max_delete_percent = 25
+max_file_bytes = 1073741824
+device_name = "Desktop"
