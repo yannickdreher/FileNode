@@ -10,9 +10,7 @@ server = "https://jmap.example.com"
 web_url = "https://mail.example.com"
 username = ""
 local_folder = '$project/.dev/files'
-remote_folder = "Noritec Drive Debug"
 propagate_deletes = false
-auto_connect = false
 autostart = false
 EOF
 fi

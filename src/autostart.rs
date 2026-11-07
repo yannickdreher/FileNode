@@ -2,13 +2,16 @@ use anyhow::Result;
 use std::path::Path;
 
 pub fn set(enabled: bool, profile: &Path) -> Result<()> {
+    set_executable(enabled, profile, &std::env::current_exe()?)
+}
+
+pub fn set_executable(enabled: bool, profile: &Path, executable: &Path) -> Result<()> {
     #[cfg(windows)]
     {
         use winreg::{enums::HKEY_CURRENT_USER, RegKey};
         let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
             .create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Run")?;
         if enabled {
-            let executable = std::env::current_exe()?;
             let profile = std::path::absolute(profile)?;
             key.set_value(
                 "NoritecDrive",
@@ -32,11 +35,11 @@ pub fn set(enabled: bool, profile: &Path) -> Result<()> {
             .ok_or_else(|| anyhow::anyhow!("User configuration directory unavailable"))?
             .config_dir()
             .join("autostart");
+        // Preserve the registration filename to avoid duplicate startup entries after a rename.
         let target = directory.join("noritec-drive.desktop");
         if enabled {
-            let executable = std::env::current_exe()?;
             let profile = std::path::absolute(profile)?;
-            let body = format!("[Desktop Entry]\nType=Application\nName=Noritec Drive\nExec={} --background --config {}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n", quote_exec(&executable)?, quote_exec(&profile)?);
+            let body = format!("[Desktop Entry]\nType=Application\nName=NoriDrive\nExec={} --background --config {}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n", quote_exec(executable)?, quote_exec(&profile)?);
             std::fs::create_dir_all(directory)?;
             std::fs::write(target, body)?;
         } else {

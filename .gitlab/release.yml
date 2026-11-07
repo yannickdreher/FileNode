@@ -1,0 +1,87 @@
+workflow:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "parent_pipeline"'
+
+stages: [plan, build, publish]
+
+default:
+  interruptible: false
+  tags: [docker]
+
+variables:
+  GIT_DEPTH: "0"
+  CARGO_HOME: "$CI_PROJECT_DIR/.cargo"
+  CARGO_TARGET_DIR: "$CI_PROJECT_DIR/target"
+  CARGO_BUILD_JOBS: "2"
+
+.node-release:
+  image: node:24-bookworm-slim
+  cache:
+    key:
+      prefix: release-tools
+      files: [package-lock.json]
+    paths: [.npm/]
+  before_script:
+    - apt-get update -qq && apt-get install -y --no-install-recommends git ca-certificates
+    - npm ci --ignore-scripts --no-audit --no-fund --cache .npm
+  environment:
+    name: release
+    action: prepare
+
+plan:
+  extends: .node-release
+  stage: plan
+  script:
+    - npm run release:plan
+  artifacts:
+    expire_in: 90 days
+    paths: [.release/]
+    reports:
+      dotenv: .release/plan.env
+
+linux-build:
+  stage: build
+  image: rust:1-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57
+  timeout: 1h
+  needs: [plan]
+  cache:
+    key:
+      prefix: rust-1.98.1
+      files: [Cargo.lock]
+    paths: [.cargo/registry/, .cargo/git/]
+  before_script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends nodejs pkg-config libdbus-1-dev cmake ninja-build g++ qt6-base-dev qt6-declarative-dev
+  script:
+    - sh ci/package-linux.sh
+  artifacts:
+    expire_in: 90 days
+    paths: [dist/*.tar.gz, dist/build-linux.json]
+
+# Required for publication. Waits until a Windows shell runner is available.
+# Prerequisites: tag windows, .NET 10 SDK, Node.js, Rust MSVC, C++ tools/Windows SDK.
+windows-build:
+  inherit:
+    default: false
+  stage: build
+  tags: [windows]
+  interruptible: false
+  timeout: 1h
+  needs: [plan]
+  script:
+    - powershell.exe -NoProfile -ExecutionPolicy Bypass -File ci/package-windows.ps1
+  artifacts:
+    expire_in: 90 days
+    paths: [dist/*.zip, dist/*.msix, dist/*.exe, dist/build-windows.json]
+
+publish:
+  extends: .node-release
+  stage: publish
+  needs: [plan, linux-build, windows-build]
+  script:
+    - if [ -z "${RELEASE_VERSION:-}" ]; then echo 'No new release.'; exit 0; fi
+    - export GITLAB_TOKEN="$RELEASE_TOKEN"
+    - npm run release:publish
+  artifacts:
+    expire_in: 90 days
+    paths: [dist/SHA256SUMS, dist/BUILD-INFO.json]

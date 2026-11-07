@@ -1,5 +1,6 @@
 //! Wire adapter. FileNode is still a draft: Stalwart 0.16 uses nodeType/type,
 //! Stalwart 1.0 uses @type/mediaType. Never emulate files through WebDAV.
+use crate::auth::Authentication;
 use crate::{config::Config, model::*};
 use anyhow::{anyhow, bail, Context, Result};
 use reqwest::{
@@ -19,7 +20,6 @@ use std::{
     time::Duration,
 };
 use url::Url;
-use zeroize::Zeroizing;
 
 pub trait Remote {
     fn account_id(&self) -> &str;
@@ -52,12 +52,12 @@ pub struct Jmap {
     api: Url,
     upload_url: String,
     download_url: String,
-    username: String,
-    password: Zeroizing<String>,
+    authentication: Authentication,
     pub account_id: String,
     modern: bool,
     cancel: Arc<AtomicBool>,
     max_bytes: u64,
+    policy: Arc<crate::runtime::Policy>,
 }
 
 impl Jmap {
@@ -71,6 +71,33 @@ impl Jmap {
         cancel: Arc<AtomicBool>,
         test_http: bool,
     ) -> Result<Self> {
+        Self::connect_authorized_inner(
+            config,
+            Authentication::basic(&config.username, password),
+            cancel,
+            test_http,
+        )
+    }
+
+    pub fn connect_authenticated(
+        config: &Config,
+        authentication: Authentication,
+        cancel: Arc<AtomicBool>,
+    ) -> Result<Self> {
+        Self::connect_authorized_inner(config, authentication, cancel, false)
+    }
+
+    fn connect_authorized_inner(
+        config: &Config,
+        authentication: Authentication,
+        cancel: Arc<AtomicBool>,
+        test_http: bool,
+    ) -> Result<Self> {
+        let policy = crate::runtime::Policy::new(
+            config,
+            cancel.clone(),
+            Arc::new(crate::runtime::PowerState::default()),
+        );
         let origin = Url::parse(&config.server)?;
         if !test_http && origin.scheme() != "https" {
             bail!("HTTPS is required");
@@ -79,16 +106,16 @@ impl Jmap {
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
-            .user_agent(concat!("Noritec-Drive/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("NoriDrive/", env!("CARGO_PKG_VERSION")))
             .build()?;
         let mut discovery = origin.join("/.well-known/jmap")?;
         let mut session = None;
         for _ in 0..6 {
             same_origin(&origin, &discovery)?;
-            let response = client
-                .get(discovery.clone())
-                .basic_auth(&config.username, Some(&password))
+            let response = authentication
+                .apply(client.get(discovery.clone()))?
                 .send()?;
+            authentication.observe(response.status())?;
             if response.status().is_redirection() {
                 let location = response
                     .headers()
@@ -154,16 +181,34 @@ impl Jmap {
             api,
             upload_url,
             download_url,
-            username: config.username.clone(),
-            password: Zeroizing::new(password),
+            authentication,
             account_id,
             modern,
             cancel,
             max_bytes: config.max_file_bytes,
+            policy,
         };
         this.expand(&this.upload_url, None)?;
         this.expand(&this.download_url, Some(("probe", "probe")))?;
         Ok(this)
+    }
+
+    pub fn set_policy(&mut self, policy: Arc<crate::runtime::Policy>) {
+        self.policy = policy;
+    }
+
+    fn transfer_timeout(&self, size: u64, upload: bool) -> Duration {
+        let rate = if upload {
+            &self.policy.upload
+        } else {
+            &self.policy.download
+        }
+        .load(Ordering::Relaxed);
+        Duration::from_secs(
+            size.checked_div(rate)
+                .map(|seconds| seconds + 180)
+                .unwrap_or(120),
+        )
     }
 
     fn expand(&self, template: &str, blob: Option<(&str, &str)>) -> Result<Url> {
@@ -185,6 +230,7 @@ impl Jmap {
     }
 
     fn call(&self, method: &str, args: Value) -> Result<Value> {
+        self.policy.check()?;
         if self.cancel.load(Ordering::Relaxed) {
             bail!("Synchronization paused");
         }
@@ -193,11 +239,12 @@ impl Jmap {
         let mut last_error = None;
         for attempt in 0..attempts {
             let result = self
-                .client
-                .post(self.api.clone())
-                .basic_auth(&self.username, Some(self.password.as_str()))
-                .json(&body)
+                .authentication
+                .apply(self.client.post(self.api.clone()).json(&body))?
                 .send();
+            if let Ok(response) = &result {
+                self.authentication.observe(response.status())?;
+            }
             match result {
                 Ok(response)
                     if response.status() == StatusCode::TOO_MANY_REQUESTS
@@ -399,13 +446,20 @@ impl Remote for Jmap {
         }
         let file = File::open(path)?;
         let response = self
-            .client
-            .post(self.expand(&self.upload_url, None)?)
-            .basic_auth(&self.username, Some(self.password.as_str()))
-            .header(header::CONTENT_TYPE, "application/octet-stream")
-            .header(header::CONTENT_LENGTH, size)
-            .body(file)
+            .authentication
+            .apply(
+                self.client
+                    .post(self.expand(&self.upload_url, None)?)
+                    .header(header::CONTENT_TYPE, "application/octet-stream")
+                    .header(header::CONTENT_LENGTH, size)
+                    .timeout(self.transfer_timeout(size, true))
+                    .body(reqwest::blocking::Body::sized(
+                        crate::runtime::LimitedReader::new(file, self.policy.clone()),
+                        size,
+                    )),
+            )?
             .send()?;
+        self.authentication.observe(response.status())?;
         let value = read_json(response)?;
         if value["accountId"] != self.account_id || value["size"].as_u64() != Some(size) {
             bail!("Upload acknowledgement does not match the file");
@@ -435,15 +489,18 @@ impl Remote for Jmap {
             return Ok(());
         }
         let blob = node.blob_id.as_deref().context("File has no blob")?;
-        let mut request = self
-            .client
-            .get(self.expand(&self.download_url, Some((blob, &node.name)))?)
-            .basic_auth(&self.username, Some(self.password.as_str()))
-            .header(header::ACCEPT_ENCODING, "identity");
+        let mut request = self.authentication.apply(
+            self.client
+                .get(self.expand(&self.download_url, Some((blob, &node.name)))?)
+                .header(header::ACCEPT_ENCODING, "identity"),
+        )?;
         if offset > 0 {
             request = request.header(header::RANGE, format!("bytes={offset}-"));
         }
-        let mut response = request.send()?;
+        let mut response = request
+            .timeout(self.transfer_timeout(node.size, false))
+            .send()?;
+        self.authentication.observe(response.status())?;
         let append = response.status() == StatusCode::PARTIAL_CONTENT && offset > 0;
         if append {
             let range = response
@@ -466,8 +523,10 @@ impl Remote for Jmap {
             .truncate(!append)
             .open(path)?;
         let mut total = if append { offset } else { 0 };
-        let mut buffer = [0u8; 65536];
+        let mut buffer = [0u8; 16384];
+        let mut budget = crate::runtime::Budget::new(self.policy.clone(), false);
         loop {
+            self.policy.check()?;
             if self.cancel.load(Ordering::Relaxed) {
                 bail!("Transfer paused");
             }
@@ -479,6 +538,7 @@ impl Remote for Jmap {
             if total > node.size || total > self.max_bytes {
                 bail!("Download exceeds advertised size");
             }
+            budget.reserve(n)?;
             output.write_all(&buffer[..n])?;
         }
         output.sync_all()?;
@@ -602,18 +662,19 @@ fn parse_node(raw: &Value) -> Result<Node> {
     Ok(node)
 }
 
-pub fn scoped_tree(snapshot: &Snapshot, root_id: &str) -> Result<RemoteTree> {
+/// None selects the account root: nodes with a null parentId are top-level entries.
+pub fn scoped_tree(snapshot: &Snapshot, root_id: Option<&str>) -> Result<RemoteTree> {
     let all: HashMap<_, _> = snapshot.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     if all.len() != snapshot.nodes.len() {
         bail!("Duplicate file IDs in snapshot");
     }
-    if all.get(root_id).is_none_or(|n| n.kind != Kind::Directory) {
+    if root_id.is_some_and(|id| all.get(id).is_none_or(|n| n.kind != Kind::Directory)) {
         bail!("Remote sync folder disappeared; synchronization blocked");
     }
     let mut result = RemoteTree::new();
     let mut names = HashSet::new();
     for node in &snapshot.nodes {
-        if node.id == root_id {
+        if Some(node.id.as_str()) == root_id {
             continue;
         }
         let mut pieces = vec![node.name.as_str()];
@@ -624,14 +685,15 @@ pub fn scoped_tree(snapshot: &Snapshot, root_id: &str) -> Result<RemoteTree> {
                 bail!("Remote directory tree is cyclic or too deep");
             }
             match current.parent_id.as_deref() {
-                Some(parent) if parent == root_id => break true,
+                Some(parent) if Some(parent) == root_id => break true,
                 Some(parent) => {
                     current = all
                         .get(parent)
-                        .context("Incomplete remote directory tree")?;
+                        .filter(|n| n.kind == Kind::Directory)
+                        .context("Remote parent directory is missing or is not a directory")?;
                     pieces.push(&current.name);
                 }
-                None => break false,
+                None => break root_id.is_none(),
             }
         };
         if !in_scope {
@@ -672,6 +734,45 @@ mod tests {
     use super::*;
     use std::{io::BufRead, net::TcpListener, thread};
 
+    #[test]
+    fn account_root_rejects_collisions_cycles_and_invalid_parents() {
+        let directory = Node {
+            id: "dir".into(),
+            name: "docs".into(),
+            parent_id: None,
+            blob_id: None,
+            kind: Kind::Directory,
+            size: 0,
+        };
+        let file = Node {
+            id: "file".into(),
+            name: "a.txt".into(),
+            parent_id: Some("dir".into()),
+            blob_id: Some("blob".into()),
+            kind: Kind::File,
+            size: 1,
+        };
+        let mut snapshot = Snapshot {
+            state: "1".into(),
+            nodes: vec![directory, file],
+        };
+        let tree = scoped_tree(&snapshot, None).unwrap();
+        assert!(tree.contains_key("docs/a.txt"));
+        snapshot.nodes[0].parent_id = Some("missing".into());
+        assert!(scoped_tree(&snapshot, None).is_err());
+        snapshot.nodes[0].parent_id = Some("dir".into());
+        assert!(scoped_tree(&snapshot, None).is_err());
+        snapshot.nodes[0].parent_id = None;
+        snapshot.nodes[0].kind = Kind::File;
+        assert!(scoped_tree(&snapshot, None).is_err());
+        snapshot.nodes[0].kind = Kind::Directory;
+        let mut collision = snapshot.nodes[1].clone();
+        collision.id = "other".into();
+        collision.name = "A.TXT".into();
+        snapshot.nodes.push(collision);
+        assert!(scoped_tree(&snapshot, None).is_err());
+    }
+
     struct Request {
         line: String,
         headers: String,
@@ -703,6 +804,7 @@ mod tests {
                         Err(error) => panic!("{error}"),
                     }
                 };
+                socket.set_nonblocking(false).unwrap();
                 socket
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
@@ -757,9 +859,13 @@ mod tests {
 
     #[test]
     fn http_round_trip_supports_both_schemas_conditional_writes_and_resumed_download() {
-        for modern in [false, true] {
+        for (modern, bearer) in [(false, false), (true, false), (false, true), (true, true)] {
             let (address, worker) = server(12, move |index, request| {
-                assert!(request.headers.contains("authorization: basic "));
+                assert!(request.headers.contains(if bearer {
+                    "authorization: bearer test-token"
+                } else {
+                    "authorization: basic "
+                }));
                 if index == 0 {
                     assert!(request.line.starts_with("GET /.well-known/jmap "));
                     return response("200 OK", "", &session(modern).to_string());
@@ -792,7 +898,7 @@ mod tests {
                 let mut file = json!({"id":"file","name":"a.txt","parentId":"root","blobId":"original","size":5});
                 file[if modern { "@type" } else { "nodeType" }] =
                     json!(if modern { "File" } else { "file" });
-                let mut root = json!({"id":"root","name":"Noritec Drive","parentId":null});
+                let mut root = json!({"id":"root","name":"NoriDrive","parentId":null});
                 root[if modern { "@type" } else { "nodeType" }] =
                     json!(if modern { "Directory" } else { "directory" });
                 let result = match index {
@@ -855,9 +961,13 @@ mod tests {
                 username: "test@example.org".into(),
                 ..Default::default()
             };
-            let mut remote = Jmap::connect_inner(
+            let mut remote = Jmap::connect_authorized_inner(
                 &config,
-                "test-secret".into(),
+                if bearer {
+                    Authentication::test_bearer("test-token")
+                } else {
+                    Authentication::basic(&config.username, "test-secret".into())
+                },
                 Arc::new(AtomicBool::new(false)),
                 true,
             )

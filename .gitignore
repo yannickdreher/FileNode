@@ -8,3 +8,12 @@
 dist/
 artifacts/
 .dev/
+.tools/
+apps/linux/build*/
+**/bin/
+**/obj/
+apps/windows/AppPackages/
+aqtinstall.log
+node_modules/
+.npm/
+.release/

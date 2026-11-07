@@ -12,9 +12,7 @@ server = "https://jmap.example.com"
 web_url = "https://mail.example.com"
 username = ""
 local_folder = '$driveLocal'
-remote_folder = "Noritec Drive Debug"
 propagate_deletes = false
-auto_connect = false
 autostart = false
 "@
     [System.IO.File]::WriteAllText($driveProfile, $driveContent, [System.Text.UTF8Encoding]::new($false))

@@ -10,11 +10,22 @@ from gi.repository import GLib
 
 DBusGMainLoop(set_as_default=True)
 bus = dbus.SessionBus()
-endpoint = Path("/tmp/noritec-drive-tray-endpoint.json")
+endpoint = Path("/tmp/noridrive-tray-endpoint.json")
 
 
 if sys.argv[1] == "host":
     class Host(dbus.service.Object):
+        @dbus.service.method("org.freedesktop.DBus.Introspectable", in_signature="", out_signature="s", path_keyword="object_path", connection_keyword="connection")
+        def Introspect(self, object_path, connection):
+            # Qt's dynamic QDBusInterface discovers properties through introspection.
+            xml = super().Introspect(object_path, connection)
+            interface = '<interface name="org.kde.StatusNotifierWatcher">'
+            return xml.replace(interface, interface + '''
+              <property name="IsStatusNotifierHostRegistered" type="b" access="read"/>
+              <property name="ProtocolVersion" type="i" access="read"/>
+              <property name="RegisteredStatusNotifierItems" type="as" access="read"/>
+            ''')
+
         @dbus.service.method("org.kde.StatusNotifierWatcher", in_signature="s", out_signature="", sender_keyword="sender")
         def RegisterStatusNotifierItem(self, service, sender=None):
             endpoint.write_text(json.dumps({"service": str(sender if service.startswith("/") else service), "path": str(service if service.startswith("/") else "/StatusNotifierItem")}))

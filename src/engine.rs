@@ -15,7 +15,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone, Debug, serde::Serialize)]
 pub struct Report {
     pub uploaded: usize,
     pub downloaded: usize,
@@ -24,6 +24,7 @@ pub struct Report {
     pub blocked: usize,
     pub renamed: usize,
     pub needs_rescan: bool,
+    pub deferred: usize,
 }
 
 pub fn sync<R: Remote>(
@@ -56,13 +57,16 @@ pub fn sync_with_scanner<R: Remote>(
         store.set_meta("account_id", &remote.account_id())?;
     }
     // A scan MUST finish completely before any remote mutation or deletion is planned.
-    let local = scanner.scan(config.max_file_bytes)?;
+    crate::runtime::check()?;
+    scanner.set_settle_seconds(config.file_settle_seconds);
+    let mut local = scanner.scan(config.max_file_bytes)?;
     let cache = store.get_meta::<Snapshot>("remote_snapshot")?;
     let mut snapshot = remote.snapshot(cache.as_ref())?;
     if cache.as_ref().is_none_or(|old| old.state != snapshot.state) {
         store.set_meta("remote_snapshot", &snapshot)?;
     }
-    let root_id = match store.get_meta::<String>("remote_root_id")? {
+    let remote_folder = config.remote_folder_name()?;
+    let root_id = Some(match store.get_meta::<String>("remote_root_id")? {
         Some(id) => {
             if !snapshot
                 .nodes
@@ -78,15 +82,14 @@ pub fn sync_with_scanner<R: Remote>(
                 .nodes
                 .iter()
                 .filter(|n| {
-                    n.parent_id.is_none()
-                        && disk::folded(&n.name) == disk::folded(&config.remote_folder)
+                    n.parent_id.is_none() && disk::folded(&n.name) == disk::folded(remote_folder)
                 })
                 .cloned()
                 .collect();
             let node = match matches.as_slice() {
                 [node] if node.kind == Kind::Directory => node.clone(),
                 [] => remote.create(
-                    &config.remote_folder,
+                    remote_folder,
                     None,
                     Kind::Directory,
                     None,
@@ -101,9 +104,18 @@ pub fn sync_with_scanner<R: Remote>(
             store.set_meta("remote_root_id", &node.id)?;
             node.id
         }
+    });
+    let mut tree = jmap::scoped_tree(&snapshot, root_id.as_deref())?;
+    let mut base = store.baselines()?;
+    let deferred = scanner.deferred_roots();
+    let allowed = |path: &str| {
+        !deferred
+            .iter()
+            .any(|root| path == root || path.starts_with(&format!("{root}/")))
     };
-    let mut tree = jmap::scoped_tree(&snapshot, &root_id)?;
-    let base = store.baselines()?;
+    local.retain(|path, _| allowed(path));
+    tree.retain(|path, _| allowed(path));
+    base.retain(|path, _| allowed(path));
     if reconcile_rename(
         config,
         store,
@@ -121,9 +133,16 @@ pub fn sync_with_scanner<R: Remote>(
         });
     }
     let actions = planner::plan(&local, &tree, &base, config)?;
-    let mut report = Report::default();
+    let mut report = Report {
+        deferred: deferred.len(),
+        ..Report::default()
+    };
+    if !deferred.is_empty() {
+        log(Message::new("log.deferred").with("count", deferred.len()));
+    }
     let mut trash_id: Option<String> = None;
     for action in actions {
+        crate::runtime::check()?;
         if cancel.load(Ordering::Relaxed) {
             bail!("Synchronization paused");
         }
@@ -151,6 +170,14 @@ pub fn sync_with_scanner<R: Remote>(
             store.record(&path, l, node)?;
             continue;
         }
+        if expected.is_some_and(|entry| entry.kind == Kind::File) {
+            let target = disk::checked_path(&config.local_folder, &path)?;
+            if disk::open_snapshot(&target).is_err() {
+                report.deferred += 1;
+                log(Message::new("log.busy").with("path", &path));
+                continue;
+            }
+        }
         let op = store.begin(&action)?;
         let completed = match &action {
             Action::Upload(_) => "log.uploaded",
@@ -174,10 +201,10 @@ pub fn sync_with_scanner<R: Remote>(
             }
             Action::CreateRemoteDir(_) => {
                 disk::verify_local(&config.local_folder, &path, expected, config.max_file_bytes)?;
-                let (parent, name) = parent_and_name(&tree, &root_id, &path)?;
+                let (parent, name) = parent_and_name(&tree, root_id.as_deref(), &path)?;
                 let node = remote.create(
                     name,
-                    Some(&parent),
+                    parent.as_deref(),
                     Kind::Directory,
                     None,
                     0,
@@ -201,25 +228,26 @@ pub fn sync_with_scanner<R: Remote>(
                         .local_folder
                         .join(disk::PRIVATE_DIR)
                         .join("transfers"),
-                )?;
-                fs::copy(&source, staged.path())?;
-                staged.as_file().sync_all()?;
-                if &disk::hash_file(staged.path(), config.max_file_bytes)? != expected {
+                )?
+                .into_temp_path();
+                // Close the creating write handle before a deny-write snapshot is opened.
+                disk::stage_snapshot(&source, &staged)?;
+                if &disk::hash_file(&staged, config.max_file_bytes)? != expected {
                     bail!("File changed while preparing upload: {path}");
                 }
-                let blob = remote.upload(staged.path(), expected.size)?;
+                let blob = remote.upload(&staged, expected.size)?;
                 disk::verify_local(
                     &config.local_folder,
                     &path,
                     Some(expected),
                     config.max_file_bytes,
                 )?;
-                let (parent, name) = parent_and_name(&tree, &root_id, &path)?;
+                let (parent, name) = parent_and_name(&tree, root_id.as_deref(), &path)?;
                 let node = if let Some(previous) = tree.get(&path) {
                     let trash = ensure_trash(
                         remote,
                         store,
-                        &root_id,
+                        root_id.as_deref(),
                         &snapshot.nodes,
                         &mut trash_id,
                         &mut snapshot.state,
@@ -240,14 +268,14 @@ pub fn sync_with_scanner<R: Remote>(
                     remote.update(
                         previous,
                         name,
-                        Some(&parent),
+                        parent.as_deref(),
                         Some((&blob, expected.size)),
                         &mut snapshot.state,
                     )?
                 } else {
                     remote.create(
                         name,
-                        Some(&parent),
+                        parent.as_deref(),
                         Kind::File,
                         Some(&blob),
                         expected.size,
@@ -319,7 +347,7 @@ pub fn sync_with_scanner<R: Remote>(
                 let trash = ensure_trash(
                     remote,
                     store,
-                    &root_id,
+                    root_id.as_deref(),
                     &snapshot.nodes,
                     &mut trash_id,
                     &mut snapshot.state,
@@ -357,7 +385,7 @@ fn check_state<R: Remote>(remote: &R, expected: &str) -> Result<()> {
 fn ensure_trash<R: Remote>(
     remote: &mut R,
     store: &Store,
-    root: &str,
+    root: Option<&str>,
     nodes: &[Node],
     cached: &mut Option<String>,
     state: &mut String,
@@ -368,9 +396,7 @@ fn ensure_trash<R: Remote>(
     }
     let matches: Vec<_> = nodes
         .iter()
-        .filter(|n| {
-            n.parent_id.as_deref() == Some(root) && disk::folded(&n.name) == disk::REMOTE_TRASH
-        })
+        .filter(|n| n.parent_id.as_deref() == root && disk::folded(&n.name) == disk::REMOTE_TRASH)
         .collect();
     let id = match matches.as_slice() {
         [node] if node.kind == Kind::Directory => {
@@ -379,14 +405,7 @@ fn ensure_trash<R: Remote>(
         }
         [] => {
             remote
-                .create(
-                    disk::REMOTE_TRASH,
-                    Some(root),
-                    Kind::Directory,
-                    None,
-                    0,
-                    state,
-                )?
+                .create(disk::REMOTE_TRASH, root, Kind::Directory, None, 0, state)?
                 .id
         }
         _ => bail!("Invalid remote recovery storage"),
@@ -396,17 +415,23 @@ fn ensure_trash<R: Remote>(
     Ok(id)
 }
 
-fn parent_and_name<'a>(tree: &RemoteTree, root: &str, path: &'a str) -> Result<(String, &'a str)> {
+fn parent_and_name<'a>(
+    tree: &RemoteTree,
+    root: Option<&str>,
+    path: &'a str,
+) -> Result<(Option<String>, &'a str)> {
     match path.rsplit_once('/') {
         Some((parent, name)) => Ok((
-            tree.get(parent)
-                .filter(|n| n.kind == Kind::Directory)
-                .context("Remote parent directory is missing")?
-                .id
-                .clone(),
+            Some(
+                tree.get(parent)
+                    .filter(|n| n.kind == Kind::Directory)
+                    .context("Remote parent directory is missing")?
+                    .id
+                    .clone(),
+            ),
             name,
         )),
-        None => Ok((root.to_owned(), path)),
+        None => Ok((root.map(str::to_owned), path)),
     }
 }
 
@@ -453,9 +478,11 @@ fn reconcile_rename<R: Remote>(
             }
         }
     }
-    let root = store
-        .get_meta::<String>("remote_root_id")?
-        .context("Root is missing")?;
+    let root = Some(
+        store
+            .get_meta::<String>("remote_root_id")?
+            .context("Root is missing")?,
+    );
     for (old, b) in entries {
         if b.local.kind != Kind::File || local.contains_key(old) {
             continue;
@@ -474,7 +501,7 @@ fn reconcile_rename<R: Remote>(
             continue;
         }
         let (new, value) = matches[0];
-        let Ok((parent, name)) = parent_and_name(tree, &root, new) else {
+        let Ok((parent, name)) = parent_and_name(tree, root.as_deref(), new) else {
             continue;
         };
         disk::verify_local(&config.local_folder, old, None, config.max_file_bytes)?;
@@ -488,7 +515,7 @@ fn reconcile_rename<R: Remote>(
             from: old.clone(),
             to: new.clone(),
         })?;
-        remote.update(node, name, Some(&parent), None, state)?;
+        remote.update(node, name, parent.as_deref(), None, state)?;
         store.rename_baseline(old, new)?;
         store.done(&op)?;
         log(Message::new("log.local_rename")

@@ -1,15 +1,94 @@
 //! Stateful integration tests: real filesystem + SQLite, simulated immutable
 //! JMAP blobs and global ifInState. No production account is ever contacted.
 use anyhow::{bail, Result};
-use noritec_drive::{config::Config, engine, filesystem, jmap::Remote, model::*, store::Store};
+use noridrive::{config::Config, engine, filesystem, jmap::Remote, model::*, store::Store};
 use std::{collections::HashMap, fs, path::Path, sync::atomic::AtomicBool};
+
+#[test]
+fn locked_file_is_deferred_without_deletion_while_other_files_sync() {
+    let mut f = Fixture::new();
+    f.local("busy.txt", "original");
+    f.run().unwrap();
+    let handle = fs::File::options()
+        .read(true)
+        .write(true)
+        .open(f.folder.path().join("busy.txt"))
+        .unwrap();
+    fs2::FileExt::try_lock_exclusive(&handle).unwrap();
+    f.server.edit("busy.txt", "remote edit");
+    f.local("available.txt", "new file");
+    let report = f.run().unwrap();
+    assert!(report.deferred > 0);
+    assert_eq!(report.recycled, 0);
+    assert_eq!(report.uploaded, 1);
+    drop(handle);
+    // Windows byte-range locks also block reads through another handle.
+    assert_eq!(f.read("busy.txt"), "original");
+    f.run().unwrap();
+    assert_eq!(f.read("busy.txt"), "remote edit");
+    assert!(f.history_contains(b"original"));
+}
+
+#[test]
+fn changing_file_must_settle_before_upload() {
+    use noridrive::scanner::LocalScanner;
+    use std::time::Duration;
+    let mut f = Fixture::new();
+    f.config.file_settle_seconds = 1;
+    f.local("growing.txt", "first chunk");
+    let mut store = Store::open(&f.config).unwrap();
+    let mut scanner = LocalScanner::new(f.folder.path(), 900);
+    let mut run = |f: &mut Fixture| {
+        engine::sync_with_scanner(
+            &f.config,
+            &mut store,
+            &mut f.server,
+            &AtomicBool::new(false),
+            &mut |_| {},
+            &mut scanner,
+        )
+        .unwrap()
+    };
+    assert_eq!(run(&mut f).deferred, 1);
+    f.local("growing.txt", "complete document");
+    assert_eq!(run(&mut f).deferred, 1);
+    std::thread::sleep(Duration::from_millis(550));
+    assert_eq!(run(&mut f).deferred, 1);
+    assert!(!f.server.nodes.iter().any(|node| node.name == "growing.txt"));
+    std::thread::sleep(Duration::from_millis(550));
+    assert_eq!(run(&mut f).uploaded, 1);
+    let node = f.server.node("growing.txt");
+    assert_eq!(
+        f.server.blobs[node.blob_id.as_ref().unwrap()],
+        b"complete document"
+    );
+}
+
+#[test]
+fn power_pause_prevents_scan_and_remote_mutations_until_resumed() {
+    use noridrive::runtime::{Policy, PowerState, Scope};
+    use std::sync::Arc;
+    let mut f = Fixture::new();
+    f.local("a.txt", "one");
+    let power = Arc::new(PowerState::default());
+    let policy = Policy::new(&f.config, Arc::new(AtomicBool::new(false)), power.clone());
+    let _scope = Scope::enter(policy);
+    power.set(true, false);
+    assert!(f.run().is_err());
+    assert_eq!(f.server.writes, 0);
+    power.set(false, true);
+    assert!(f.run().is_err());
+    assert_eq!(f.server.writes, 0);
+    power.set(false, false);
+    assert_eq!(f.run().unwrap().uploaded, 1);
+}
 
 #[test]
 fn idle_sync_reuses_hashes_and_does_not_rewrite_unchanged_baselines() {
     let mut fixture = Fixture::new();
     fixture.local("a.txt", "one");
     let mut store = Store::open(&fixture.config).unwrap();
-    let mut scanner = noritec_drive::scanner::LocalScanner::new(fixture.folder.path(), 900);
+    let mut scanner = noridrive::scanner::LocalScanner::new(fixture.folder.path(), 900);
     for _ in 0..2 {
         engine::sync_with_scanner(
             &fixture.config,
@@ -177,6 +256,7 @@ impl Fixture {
             username: "test@example.org".into(),
             local_folder: folder.path().to_owned(),
             propagate_deletes: true,
+            file_settle_seconds: 0,
             ..Config::default()
         };
         Self {
@@ -212,6 +292,117 @@ impl Fixture {
         .filter_map(Result::ok)
         .any(|e| e.file_type().is_file() && fs::read(e.path()).unwrap() == value)
     }
+}
+
+#[test]
+fn local_folder_name_selects_remote_directory_and_scopes_all_operations() {
+    let mut f = Fixture::new();
+    let expected_name = f.config.remote_folder_name().unwrap().to_owned();
+    fs::create_dir(f.folder.path().join("docs")).unwrap();
+    f.local("docs/local.txt", "nested");
+    f.local("top.txt", "top-level");
+    assert_eq!(f.run().unwrap().uploaded, 3);
+    let root = f.server.node(&expected_name);
+    assert!(root.parent_id.is_none());
+    let top = f.server.node("top.txt");
+    assert_eq!(top.parent_id.as_deref(), Some(root.id.as_str()));
+    let docs = f.server.node("docs");
+    assert_eq!(docs.parent_id.as_deref(), Some(root.id.as_str()));
+    assert_eq!(f.server.node("local.txt").parent_id, Some(docs.id.clone()));
+    f.server
+        .blobs
+        .insert("incoming".into(), b"from server".to_vec());
+    let mut state = f.server.state();
+    f.server
+        .create(
+            "incoming.txt",
+            Some(&root.id),
+            Kind::File,
+            Some("incoming"),
+            11,
+            &mut state,
+        )
+        .unwrap();
+    f.server
+        .create(
+            "unrelated.txt",
+            None,
+            Kind::File,
+            Some("incoming"),
+            11,
+            &mut state,
+        )
+        .unwrap();
+    assert_eq!(f.run().unwrap().downloaded, 1);
+    assert_eq!(f.read("incoming.txt"), "from server");
+    assert!(!f.folder.path().join("unrelated.txt").exists());
+    let writes = f.server.writes;
+    f.run().unwrap();
+    assert_eq!(f.server.writes, writes);
+    fs::rename(
+        f.folder.path().join("top.txt"),
+        f.folder.path().join("docs/moved.txt"),
+    )
+    .unwrap();
+    assert_eq!(f.run().unwrap().renamed, 1);
+    assert_eq!(f.server.node("moved.txt").id, top.id);
+    assert_eq!(f.server.node("moved.txt").parent_id, Some(docs.id));
+    f.run().unwrap();
+    fs::rename(
+        f.folder.path().join("docs/moved.txt"),
+        f.folder.path().join("back.txt"),
+    )
+    .unwrap();
+    assert_eq!(f.run().unwrap().renamed, 1);
+    assert_eq!(f.server.node("back.txt").id, top.id);
+    assert_eq!(f.server.node("back.txt").parent_id, Some(root.id));
+}
+
+#[test]
+fn desktop_folder_name_is_derived_and_filesystem_roots_are_rejected() {
+    let f = Fixture::new();
+    let desktop = f.folder.path().join("Desktop");
+    fs::create_dir(&desktop).unwrap();
+    let mut config = Config {
+        local_folder: desktop,
+        ..f.config.clone()
+    };
+    assert_eq!(config.remote_folder_name().unwrap(), "Desktop");
+    config.validate().unwrap();
+    config.local_folder.push("");
+    assert_eq!(config.remote_folder_name().unwrap(), "Desktop");
+    #[cfg(windows)]
+    {
+        config.local_folder = std::path::PathBuf::from("C:/");
+    }
+    #[cfg(not(windows))]
+    {
+        config.local_folder = std::path::PathBuf::from("/");
+    }
+    assert!(config.validate().is_err());
+}
+
+#[test]
+fn legacy_named_remote_binding_is_not_silently_reassigned() {
+    let mut f = Fixture::new();
+    f.local("a.txt", "one");
+    f.run().unwrap();
+    {
+        let store = Store::open(&f.config).unwrap();
+        let identity = store.get_meta::<String>("identity").unwrap().unwrap();
+        let (prefix, _) = identity.rsplit_once('|').unwrap();
+        store
+            .set_meta("identity", &format!("{prefix}|Legacy remote folder"))
+            .unwrap();
+    }
+    let writes = f.server.writes;
+    assert!(f
+        .run()
+        .unwrap_err()
+        .to_string()
+        .contains("different server, account or remote folder"));
+    assert_eq!(f.server.writes, writes);
+    assert_eq!(f.read("a.txt"), "one");
 }
 
 #[test]

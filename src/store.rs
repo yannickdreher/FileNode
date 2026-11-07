@@ -41,7 +41,7 @@ impl Store {
             .write(true)
             .open(folder.join("lock"))?;
         lock.try_lock_exclusive()
-            .context("Another Drive process is using this folder")?;
+            .context("Another NoriDrive process is using this folder")?;
         let db = Connection::open(folder.join("state.sqlite"))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -54,7 +54,7 @@ impl Store {
             config.username,
             config.account_id.as_deref().unwrap_or(""),
             config.local_folder.canonicalize()?.display(),
-            config.remote_folder
+            config.remote_folder_name()?
         );
         if let Some(previous) = store.get_meta::<String>("identity")? {
             if previous != identity {

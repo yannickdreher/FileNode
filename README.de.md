@@ -1,64 +1,73 @@
-# Noritec Drive
+# NoriDrive
 
 Deutsch · [English](README.md)
 
-Ein Rust-Desktop-Client für **Stalwart JMAP Files**, mit Builds für Windows und Linux und einer deutsch/englischen Oberfläche. **Version 0.1 ist eine Preview** mit vollständigen lokalen Dateien und automatisierten Fehlertests. Die langfristige Zuverlässigkeit im Produktivbetrieb ist noch nicht nachgewiesen.
+JMAP-Dateisynchronisation für Windows und Linux mit gemeinsamem Rust-Kern. Windows verwendet ein eigenes **WinUI-3-/C#-Projekt**, Linux ein getrenntes **Qt-6-/C++-/QML-Projekt**. Die Oberfläche ist Deutsch/Englisch, Code und technische Diagnosen sind Englisch. Version 0.1 bleibt eine Preview.
+
+## Hintergrundbetrieb
+
+Die App läuft im angemeldeten Benutzerkontext mit Tray-Icon, kompakter Aktivitätsansicht und eigenem Einstellungsfenster. Geschlossene Fenster beenden den Abgleich nicht. Erst Beenden stoppt die Anwendung und den Rust-Worker. Ein Windows-Systemdienst oder eine systemd-Unit wird nicht installiert. Unter Linux ist ein StatusNotifier-Host nötig, unter GNOME gegebenenfalls eine AppIndicator-Erweiterung. Ohne Tray das Statusfenster geöffnet oder minimiert lassen.
+
+Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regeln. Unter KDE nutzt Qt bei vorhandenen Integrationspaketen den KDE-Desktop-Stil. Unter GNOME ist die Linux-Oberfläche weiterhin Qt und verwendet keine GTK-/libadwaita-Steuerelemente.
 
 ## Funktionen
 
-Die App läuft über ein Symbol im Infobereich. Ein Klick öffnet eine kompakte Statusansicht mit letzten Dateiaktivitäten und Schnellzugriffen; die Einstellungen erscheinen in einem eigenen Fenster. Das Schließen eines Fensters lässt den Abgleich weiterlaufen. Pause/Fortsetzen und Beenden sind über das Tray- und Statusmenü erreichbar. Unter Allgemein kann der Start bei der Betriebssystem-Anmeldung aktiviert werden. Ohne nutzbaren Tray bleibt das Statusfenster sichtbar.
+- Vollständige lokale Dateien, bidirektionaler Abgleich, SHA-256-Inhaltsvergleich, SQLite-Dreiwege-Abgleich und dauerhaftes Journal.
+- Bei Konflikten bleiben beide Fassungen erhalten. Remote-Umbenennungen nutzen stabile IDs; eindeutige lokale Dateiumbenennungen erhalten die Server-Identität.
+- Löschweitergabe erst nach Aktivierung, mit Schutz vor Massenlöschungen. Vorherige Fassungen liegen lokal in `.noritec-drive/history` und remote in `.noritec-drive-trash`. Kein `FileNode/destroy`.
+- Native Dateisystem-Ereignisse unter Windows und Linux, Bündelung von Änderungen, Hash-Cache, regelmäßige vollständige Kontrolle und JMAP `FileNode/changes`.
+- Upload und Download getrennt in KiB/s begrenzen, auch während des Betriebs. Null bedeutet unbegrenzt.
+- Gesperrte Dateien werden zurückgestellt; geänderte Dateien müssen über mehrere Beobachtungen stabil bleiben. Andere oberste Dateigruppen können weiter synchronisieren.
+- Desktop-Energieereignisse pausieren Scans und Übertragungen bei Energiesparen/Standby. Die Energiesparoption ist abschaltbar; nach dem Aufwachen wird neu geprüft. Die App verhindert den Standby nicht.
+- App-Passwörter im Windows Credential Manager oder Linux Secret Service, HTTPS und Prüfung der Endpoint-Origin.
 
-- Dateien und Ordner werden in beide Richtungen mit einem eigenen Remote-Ordner `Noritec Drive` abgeglichen. Andere oberste Ordner in Bulwark gehören nicht zu diesem Profil.
-- SHA-256-Inhaltsvergleich, persistenter Dreiwege-Abgleich in SQLite und Erkennung gleichzeitiger Änderungen. Bei Konflikten bleiben beide Fassungen erhalten: Die Serverfassung erhält den ursprünglichen Pfad, die lokale Fassung einen zusätzlichen Namen `name (conflict <id>).ext` und wird im nächsten Durchlauf hochgeladen.
-- Remote-Umbenennungen anhand stabiler IDs und eindeutige lokale Dateiumbenennungen anhand unveränderter Inhalte. Komplexere Fälle nutzen Übertragung und Wiederherstellungsablage.
-- Löschungen werden erst nach ausdrücklicher Aktivierung weitergegeben. Lokal entfernte Einträge werden auf dem Server in `.noritec-drive-trash` verschoben; serverseitig entfernte Einträge lokal nach `.noritec-drive/history/<id>/`. Vor dem Überschreiben auf dem Server entsteht ebenfalls eine Wiederherstellungskopie. Der Client ruft `FileNode/destroy` nicht auf.
-- Schutz vor Massenlöschungen, unvollständigen Scans, verschwundenen Remote-Sync-Ordnern, unsicheren Pfaden und konkurrierenden Änderungen. Ein Prozess pro lokalem Ordner, dauerhaftes Journal, erneute Bestandsaufnahme nach unklaren Antworten, automatische Wiederholungen in der GUI und fortsetzbare Downloads.
-- Zugangsdaten im Windows Credential Manager beziehungsweise Linux Secret Service, ausschließlich HTTPS und keine Weitergabe der Zugangsdaten an andere Origins.
-- Native Dateisystem-Ereignisse, Bündelung kurzer Änderungsserien, Metadaten-/Hash-Cache, regelmäßige vollständige Kontrollprüfung und Wiederverwendung der JMAP-Verbindung. Unveränderte Baselines werden nicht ständig neu in SQLite geschrieben.
-- Systemsprache automatisch erkennen oder **Deutsch/English** direkt umschalten. Die Auswahl wird pro Profil gespeichert. Auch vorhandene Aktivitätsmeldungen wechseln die Sprache. Code, technische Diagnosen, Protokollwerte und Konfliktdateinamen bleiben Englisch.
+## Bauen und starten
 
-## Starten
+Die [deutsche Entwicklungsanleitung](docs/development.de.md) beschreibt VS Code und Voraussetzungen. [Projektstruktur und Paketierung](docs/desktop-frontends.md) sind Englisch dokumentiert.
 
-Das portable Archiv aus den Artefakten des Jobs **test-and-package** einer erfolgreichen GitLab-Pipeline herunterladen und entpacken. Unter Windows `noritec-drive.exe`, unter Linux `./noritec-drive` starten. Windows-Builds sind derzeit nicht signiert. Der Linux-Build setzt x86-64, Debian 12/glibc 2.36 oder neuer, X11/Wayland, OpenGL, D-Bus, für X11 zusätzlich `libxkbcommon-x11-0` und einen entsperrten Secret Service voraus, beispielsweise GNOME Keyring oder entsprechend eingerichtetes KDE Wallet.
+Windows mit Rust MSVC, C++ Build Tools, .NET 10 und Windows SDK:
 
-1. Unter **Einstellungen → Konto** Server, E-Mail/Benutzername und ein **Stalwart-App-Passwort** eintragen. Vorgabe ist `https://jmap.example.com`.
-2. Unter **Synchronisation und Wiederherstellung** einen eigenen lokalen Ordner wählen; er wird bei Bedarf angelegt. Pro Server/Konto/Profil einen getrennten Ordner verwenden.
-3. Die Weitergabe von Löschungen zunächst ausgeschaltet lassen und **Verbinden & synchronisieren** wählen. Unterschiedliche Inhalte am selben Pfad werden beim ersten Abgleich als Konflikt erhalten.
-4. Das Ergebnis prüfen und bei Bedarf im pausierten Zustand die Weitergabe von Löschungen einschalten. Genügend Platz für alle Dateien und Wiederherstellungskopien einplanen.
-
-Das Dateikonto wird per JMAP ermittelt. Falls mehrere Konten infrage kommen, `account_id` im Profil festlegen. Die Anmeldung nutzt derzeit App-Passwörter über HTTPS; ein interaktiver authentik-/SSO-Browser-Login ist noch nicht enthalten.
-
-## Profile und Kommandozeile
-
-Die GUI speichert eine passwortfreie `config.toml` im Benutzer-Konfigurationsverzeichnis: unter Windows `%APPDATA%\Noritec\Drive\config\`, unter Linux `$XDG_CONFIG_HOME/drive/` beziehungsweise `~/.config/drive/`. Über `--config <Pfad>` sind weitere Profile möglich. [config.example.toml](config.example.toml) zeigt die Optionen; für den Headless-Betrieb muss der lokale Ordner als absoluter Pfad bereits existieren.
-
-```sh
-noritec-drive --language de
-noritec-drive --language en
-noritec-drive --headless --config /pfad/profil.toml --dry-run
-noritec-drive --headless --config /pfad/profil.toml --once --language de
+```powershell
+powershell.exe -NoProfile -File scripts/build-windows.ps1
+& apps/windows/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64/noridrive-ui.exe
+# Unsigniertes lokales MSIX erstellen, ohne Installation oder Veröffentlichung:
+powershell.exe -NoProfile -File scripts/build-windows.ps1 -Configuration Release -Package
 ```
 
-Headless wird das App-Passwort aus dem Betriebssystem-Schlüsselspeicher gelesen; alternativ kann ein Secret Manager `NORITEC_DRIVE_PASSWORD` bereitstellen. Passwort weder in TOML noch als Kommandozeilenargument ablegen. Ein Build ohne Desktop-Features benötigt diese Umgebungsvariable. CLI-Hilfe, JSON-Pläne und technische Fehlerdetails sind Englisch; verständliche Abgleichmeldungen folgen der gewählten Sprache.
+Linux mit Qt 6.4+ samt Entwicklungs- und QML-Laufzeitmodulen:
 
-Windows-Desktop-Releases öffnen kein zusätzliches Konsolenfenster. In PowerShell-Skripten ausdrücklich auf den Prozess warten (`Start-Process -Wait`, bei Bedarf mit Ausgabeumleitung). Interaktive GUI-Programme blockieren die aufrufende Shell nicht immer. Native Debug-Builds behalten ihre Konsole für den Debugger.
+```sh
+sh scripts/build-linux.sh
+./target/debug/noridrive-ui
+```
 
-`--dry-run` verändert keine Nutzdateien oder Remote-Objekte, kann aber lokale Profilmetadaten anlegen. `--once` erledigt notwendige Folgeprüfungen nach Konflikten/Umbenennungen. Headless beendet sich bei Netzwerkfehlern mit einem Fehlercode; ein Service-Manager kann den Prozess erneut starten. Die GUI versucht es automatisch erneut.
+Merges nach `main` führen die Tests aus; anschließend plant semantic-release Version und Änderungsprotokoll. Eine serialisierte Unterpipeline baut Linux und die native Windows-App und veröffentlicht danach Tag, GitLab-Release und dauerhafte Binärdownloads. Der Windows-Job benötigt einen Runner mit Tag `windows`; bis dieser eingerichtet ist, wartet die Veröffentlichung auf diesen Job. Siehe [Releases](docs/releases.md).
 
-## Wiederherstellung und Grenzen
+## Verbinden
 
-Lokale Sicherungsfassungen befinden sich in `.noritec-drive/history`; die gewünschte Fassung zurück in den Sync-Ordner kopieren. Remote-Sicherungen liegen in `.noritec-drive-trash` im Remote-Sync-Ordner und lassen sich etwa über Bulwark zurückkopieren oder verschieben. Vor einer manuellen Wiederherstellung den Abgleich stoppen. Die Ablagen werden nicht automatisch bereinigt und verbrauchen Speicherplatz/Quota. Sie ersetzen keine unabhängige Datensicherung; andere Clients können Dateien dauerhaft entfernen.
+Unter Einstellungen Server und Benutzername eingeben. Vorgaben sind `https://jmap.example.com` für JMAP und `https://mail.example.com` für den Webclient. Als Anmeldemethode **Browser / Single Sign-on** für OAuth Authorization Code mit PKCE oder **App-Passwort** auswählen und anschließend **Anmelden** drücken. Einen eigenen lokalen Ordner wählen, die Löschweitergabe zunächst ausgeschaltet lassen. Pro Konto/Profil einen getrennten Ordner verwenden. Die [Browser-Anmeldedokumentation](docs/browser-authentication.md) beschreibt Server-Voraussetzungen und externe OIDC-Anbieter.
 
-`.noritec-drive` nicht zur Fehlerbehebung löschen: Hier liegen Abgleichzustand, Journal, Teilübertragungen und lokale Sicherungsfassungen. Bei verschwundenem Remote-Sync-Ordner stoppt der Client absichtlich. Zunächst den Zustand auf dem Server prüfen und wiederherstellen.
+Auf der Kontoseite speichert **Anmelden** die Eingaben vor der Authentifizierung. Das Remote-Ziel entsteht automatisch: Der lokale Ordner `C:\Users\yannick\Desktop` wird in den Remote-Ordner `Desktop` auf der obersten Ebene synchronisiert. Es gibt kein Remote-Ordnerfeld und keine Auswahl des Kontostammverzeichnisses. Vorhandene lokale Zustände bleiben an ihre ursprüngliche Remote-Ordner-ID gebunden. Verwendete ein älteres Profil einen anderen Namen, einen neuen lokalen Ordner wählen; den gespeicherten Zustand nicht löschen.
 
-Lokale Dateisystem-Ereignisse lösen nach 600 ms Ruhezeit einen Abgleich aus; spätestens nach 2 Sekunden wird eine Änderungsserie geprüft. Der komplette lokale Namensraum wird weiterhin vor der Planung eingelesen. Unveränderte Fingerprints verwenden zwischengespeicherte Hashes. Geänderte Pfade, verlorene Ereignisse, Dateiwächterfehler, erneutes Verbinden, manuelle Prüfungen und eine vollständige Kontrolle alle 15 Minuten verwerfen den Cache. Ohne funktionierenden Dateiwächter wird bei jedem Durchlauf vollständig gehasht. Remote werden standardmäßig alle 30 Sekunden nach dem ersten Snapshot `FileNode/changes` abgefragt. Die Desktop-Anwendung verwendet ihre HTTP-Verbindung weiter. Übertragungen laufen seriell; Uploads werden vollständig neu übertragen, Downloads können fortgesetzt werden. Grenzen: standardmäßig 1 GiB je Datei, maximal 100.000 Einträge, 200 UTF-8-Bytes je Name und 240 Bytes je relativem Pfad. Windows-reservierte Namen, Groß-/Kleinschreibungs- und Normalisierungskollisionen, Symlinks, Reparse Points und Spezialdateien stoppen den Scan. `.git` und die internen Ablagen sind ausgeschlossen. Berechtigungen, Eigentümer, ACLs, alternative Datenströme, Hardlink-Identität und Zeitstempel werden nicht synchronisiert. Reine Änderungen der Groß-/Kleinschreibung sind auf entsprechenden Dateisystemen noch nicht zuverlässig unterstützt.
+Beim Umbenennen zu NoriDrive bleiben vorhandene Profilpfade, der Credential-Dienst und interne Zustands-/Sicherungsverzeichnisse erhalten. Bereits konfigurierte lokale und Remote-Ordner werden nicht verschoben oder umbenannt. Das GitLab-Repository heißt `noritec/noridrive`.
 
-**Noch offen:** Dateien bei Bedarf/Platzhalter wie bei OneDrive, Explorer-Integration, virtuelles Linux-Dateisystem, Browser-OAuth/SSO, Mehrkonten-Verwaltung, selektive Synchronisation, Rechte geteilter Ordner, Konflikt-/Wiederherstellungsdialoge, Bandbreitenbegrenzung, signierte Installer und automatische Updates. Tests gegen ein echtes Stalwart-Testkonto, Stromausfälle und große Bestände mit mehreren Geräten stehen noch aus. Zwischen letzter Prüfung und Umbenennung kann eine andere Anwendung eine Datei verändern; der Client bietet keine Dateisystemtransaktionen gegenüber anderen Programmen.
+Ein eingerichtetes Konto setzt die Synchronisation beim Start von NoriDrive fort. Dafür gibt es keine separate Startoption. Die Browser-Authentifizierung verwendet gespeicherte Tokens; eine interaktive Browser-Anmeldung wird weiterhin nur über die Anmeldeaktion gestartet.
 
-Die Protokolladapter berücksichtigen Stalwart **0.16 `nodeType`/`type`** und das neuere **`@type`/`mediaType`**-Schema. Beide werden mit echten HTTP-Anfragen gegen einen lokalen Testserver geprüft. FileNode ist noch ein Entwurf; die konkrete Serverversion muss vor dem Produktiveinsatz mit einem Testkonto abgenommen werden.
+Passwortfreie Profile liegen unter Windows in `%APPDATA%\Noritec\Drive\config\config.toml`, unter Linux in `$XDG_CONFIG_HOME/drive/config.toml` beziehungsweise `~/.config/drive/config.toml`. `--config <Pfad>` wählt ein anderes Profil. Optionen stehen in [config.example.toml](config.example.toml). Bei mehrdeutiger Kontenerkennung `account_id` setzen.
 
-Entwicklung, Architektur und Build-Befehle stehen im [englischen README](README.md) und in der [Architekturbeschreibung](docs/architecture.md). Übersetzungen liegen in `locales/en.json` und `locales/de.json`; automatisierte Tests prüfen Schlüssel und Platzhalter.
+```sh
+noridrive --headless --config /absolut/profil.toml --dry-run
+noridrive --headless --config /absolut/profil.toml --once --language de
+```
 
-## VS Code
+Headless muss der absolute lokale Ordner bereits existieren. Browser-Profile verwenden und erneuern die zuvor in der Desktop-App eingerichtete Sitzung ohne Browserstart. App-Passwort-Profile verwenden den OS-Schlüsselspeicher oder `NORIDRIVE_PASSWORD` aus einem Secret Manager; `NORITEC_DRIVE_PASSWORD` bleibt kompatibel. Keine Passwörter in TOML oder Kommandozeilenargumente schreiben. `--dry-run` kann interne Metadaten anlegen, verändert aber keine Nutzdateien oder Remote-Objekte. `--once` wartet zunächst auf stabile Dateien und liefert nach zweimal der eingestellten Wartezeit plus 30 Sekunden einen Fehler, falls sie weiterhin gesperrt oder in Änderung sind. Die Desktop-App versucht es weiter. Headless abonniert keine Desktop-Energieereignisse.
 
-Für Start und Debugging mit F5 den Repository-Ordner öffnen und Rust sowie die empfohlenen Erweiterungen rust-analyzer und CodeLLDB installieren. Unter Windows werden zusätzlich die C++ Build Tools und das Windows SDK benötigt. **Drive: desktop and settings** verwendet ein eigenes, von Git ignoriertes Debug-Profil ohne automatische Anmeldung oder Löschweitergabe. Details stehen in der [deutschen Debugging-Anleitung](docs/development.de.md).
+## Grenzen und Wiederherstellung
+
+Noch offen sind Dateien bei Bedarf, Explorer-Platzhalter, Blockübertragungen, Remote-Push, selektive Synchronisation, Mehrkonten-Oberfläche, Konflikt-/Wiederherstellungsdialoge, signierte Releases und automatische Updates. Übertragungen laufen seriell. Standardgrenzen: 1 GiB je Datei, 100.000 Einträge, 200 UTF-8-Bytes je Name und 240 je relativem Pfad. Symlinks/Reparse Points, unsichere Namen und Namenskollisionen stoppen den Scan. Rechte, Eigentümer, ACLs, alternative Datenströme und Zeitstempel werden nicht synchronisiert. Reine Änderungen der Groß-/Kleinschreibung sind noch nicht zuverlässig unterstützt.
+
+Der komplette Namensraum wird weiterhin eingelesen; der Cache spart Inhaltszugriffe. Dateisperren und eine Wartezeit reduzieren Rennen, garantieren aber nicht für jedes Programm das Ende eines Schreibvorgangs. Unix-Sperren sind kooperativ. Bandbreitengrenzen betreffen Nutzdaten, nicht TLS-/HTTP-Overhead und Socket-Puffer. Weitere Grenzen stehen in der [Architektur](docs/architecture.md).
+
+`.noritec-drive` nicht zur Reparatur löschen: Hier liegen Baseline, Journal, Teilübertragungen und Wiederherstellungskopien. Vor dem Zurückkopieren alter Fassungen den Abgleich pausieren. Lokale Kopien liegen in `.noritec-drive/history`, Remote-Kopien in `.noritec-drive-trash`, erreichbar etwa über Bulwark. Die Ablagen haben keine automatische Aufbewahrungsfrist und verbrauchen Speicher/Quota. Unabhängige Backups bleiben nötig.
+
+Adapter berücksichtigen Stalwart 0.16 `nodeType`/`type` und das neuere `@type`/`mediaType`-Schema. Lokale HTTP-Tests prüfen beide; Live-Stalwart-Abnahme, Stromausfälle und große Bestände auf mehreren Geräten stehen weiterhin aus.

@@ -2,59 +2,44 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Drive: desktop and settings",
-      "type": "lldb",
-      "request": "launch",
-      "cargo": {
-        "args": ["build", "--locked", "--bin", "noritec-drive"],
-        "filter": {"name": "noritec-drive", "kind": "bin"}
-      },
-      "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings", "--language", "en"],
+      "name": "NoriDrive: Windows existing build (no Cargo required)",
+      "type": "coreclr", "request": "launch",
+      "program": "${workspaceFolder}/.dev/noridrive-preview/noridrive-ui.exe",
+      "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings"],
       "cwd": "${workspaceFolder}",
-      "env": {"RUST_BACKTRACE": "1"},
-      "sourceLanguages": ["rust"],
-      "preLaunchTask": "drive: prepare debug profile"
+      "preLaunchTask": "noridrive: prepare debug profile"
     },
     {
-      "name": "Drive: background and tray",
-      "type": "lldb",
-      "request": "launch",
-      "cargo": {
-        "args": ["build", "--locked", "--bin", "noritec-drive"],
-        "filter": {"name": "noritec-drive", "kind": "bin"}
-      },
-      "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--background"],
+      "name": "NoriDrive: Windows WinUI (Microsoft C# debugger)",
+      "type": "coreclr", "request": "launch",
+      "program": "${workspaceFolder}/apps/windows/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64/noridrive-ui.exe",
+      "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings"],
       "cwd": "${workspaceFolder}",
-      "env": {"RUST_BACKTRACE": "1"},
-      "sourceLanguages": ["rust"],
-      "preLaunchTask": "drive: prepare debug profile"
+      "preLaunchTask": "noridrive: Windows desktop"
     },
     {
-      "name": "Drive: desktop without tray",
-      "type": "lldb",
-      "request": "launch",
-      "cargo": {
-        "args": ["build", "--locked", "--bin", "noritec-drive"],
-        "filter": {"name": "noritec-drive", "kind": "bin"}
-      },
+      "name": "NoriDrive: Rust core Windows (Microsoft debugger)",
+      "type": "cppvsdbg", "request": "launch",
+      "program": "${workspaceFolder}/target/x86_64-pc-windows-msvc/debug/noridrive.exe",
+      "args": ["--headless", "--once", "--config", "${workspaceFolder}/.dev/profile.toml"],
+      "cwd": "${workspaceFolder}", "preLaunchTask": "noridrive: Rust Windows",
+      "environment": [{"name": "RUST_BACKTRACE", "value": "1"}]
+    },
+    {
+      "name": "NoriDrive: Linux Qt (GDB)",
+      "type": "cppdbg", "request": "launch",
+      "program": "${workspaceFolder}/target/debug/noridrive-ui",
       "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings", "--no-tray"],
-      "cwd": "${workspaceFolder}",
-      "env": {"RUST_BACKTRACE": "1"},
-      "sourceLanguages": ["rust"],
-      "preLaunchTask": "drive: prepare debug profile"
+      "cwd": "${workspaceFolder}", "MIMode": "gdb",
+      "preLaunchTask": "noridrive: Linux desktop"
     },
     {
-      "name": "Drive: synchronization integration tests (no account)",
-      "type": "lldb",
-      "request": "launch",
-      "cargo": {
-        "args": ["test", "--locked", "--test", "synchronization", "--no-run"],
-        "filter": {"name": "synchronization", "kind": "test"}
-      },
-      "args": ["--nocapture", "--test-threads=1"],
-      "cwd": "${workspaceFolder}",
-      "env": {"RUST_BACKTRACE": "1"},
-      "sourceLanguages": ["rust"]
+      "name": "NoriDrive: Rust core Linux (GDB)",
+      "type": "cppdbg", "request": "launch",
+      "program": "${workspaceFolder}/target/debug/noridrive",
+      "args": ["--headless", "--once", "--config", "${workspaceFolder}/.dev/profile.toml"],
+      "cwd": "${workspaceFolder}", "MIMode": "gdb",
+      "preLaunchTask": "noridrive: build"
     }
   ]
 }

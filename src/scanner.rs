@@ -127,6 +127,9 @@ pub struct LocalScanner {
     last_full: Option<Instant>,
     interval: Duration,
     hashed_files: usize,
+    observed: HashMap<String, (Fingerprint, Instant)>,
+    deferred: HashSet<String>,
+    settle: Duration,
 }
 
 impl LocalScanner {
@@ -149,7 +152,23 @@ impl LocalScanner {
             last_full: None,
             interval: Duration::from_secs(full_scan_seconds),
             hashed_files: 0,
+            observed: HashMap::new(),
+            deferred: HashSet::new(),
+            settle: Duration::ZERO,
         }
+    }
+
+    pub fn set_settle_seconds(&mut self, seconds: u64) {
+        self.settle = Duration::from_secs(seconds);
+    }
+    pub fn deferred_roots(&self) -> Vec<String> {
+        // An unresolved child also protects its ancestors from being deleted or moved.
+        self.deferred
+            .iter()
+            .map(|path| path.split('/').next().unwrap_or(path).to_owned())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub fn watching(&self) -> bool {
@@ -187,6 +206,7 @@ impl LocalScanner {
             });
         }
         self.hashed_files = 0;
+        self.deferred.clear();
         let result = filesystem::scan_with(&self.root, |path, relative| {
             let before = fingerprint(path)?;
             if before.length > max_bytes {
@@ -197,7 +217,38 @@ impl LocalScanner {
                     return Ok(entry.clone());
                 }
             }
-            let entry = filesystem::hash_file(path, max_bytes)?;
+            let observed = self
+                .observed
+                .entry(relative.to_owned())
+                .or_insert((before.clone(), Instant::now()));
+            if observed.0 != before {
+                *observed = (before.clone(), Instant::now());
+            }
+            let unsettled = observed.1.elapsed() < self.settle;
+            let entry = if unsettled {
+                None
+            } else {
+                match filesystem::hash_file(path, max_bytes) {
+                    Ok(entry) => Some(entry),
+                    Err(error) => {
+                        crate::runtime::check()?;
+                        let _ = error;
+                        None
+                    }
+                }
+            };
+            let Some(entry) = entry else {
+                self.deferred.insert(relative.to_owned());
+                return Ok(self
+                    .cache
+                    .get(relative)
+                    .map(|(_, entry)| entry.clone())
+                    .unwrap_or(LocalEntry {
+                        kind: crate::model::Kind::File,
+                        hash: "deferred".into(),
+                        size: before.length,
+                    }));
+            };
             if fingerprint(path)? != before {
                 bail!("File changed during scanning: {relative}");
             }
@@ -209,6 +260,7 @@ impl LocalScanner {
         match result {
             Ok(tree) => {
                 self.cache.retain(|path, _| tree.contains_key(path));
+                self.observed.retain(|path, _| tree.contains_key(path));
                 if full {
                     self.last_full = Some(Instant::now());
                 }

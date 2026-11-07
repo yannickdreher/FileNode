@@ -1,0 +1,39 @@
+# Native desktop projects
+
+The repository contains one Rust synchronization implementation and two desktop projects:
+
+| Component | Technology | Responsibility |
+| --- | --- | --- |
+| `src/lib.rs` and modules | Rust | JMAP, planning, transfers, limits, file safety, state |
+| `src/main.rs`, `src/service.rs` | Rust executable | Headless CLI and private desktop worker |
+| `apps/windows` | C# / .NET 10 / WinUI 3 | Windows controls, Mica, tray, power, activation, MSIX |
+| `apps/linux` | C++ / Qt 6 / QML | Qt controls, KDE integration, tray, D-Bus power events |
+| `locales` | Shared JSON catalogs | English/German UI and structured activity messages |
+
+These are build projects in the same GitLab repository. Separate repositories would add release/version coordination without removing any UI maintenance.
+
+## Process lifetime and protocol
+
+Each desktop host launches an adjacent `noridrive-core[.exe] --service` with private redirected stdin/stdout. Frames are UTF-8 JSON followed by a newline. The worker's `ready` event declares `protocol: 2` and the password-free configuration. Commands are bounded to 1 MiB; UI event buffers are bounded to 16 MiB. No permanent IPC port is exposed. An explicit browser sign-in temporarily listens on IPv4 loopback for its OAuth callback. Windows uses AppInstance to redirect another launch of the same profile to the existing UI; the Rust store additionally enforces one writer per local folder on both platforms.
+
+Commands: `configure {config}`, `connect {password?,interactive?}`, `pause`, `check`, `power {saver,sleeping,available}`, `quit`. Events: `ready`, `configured`, `running`, `status`, `report`, `activity`, `retry`, `error`, `power`, `open_browser`. A frontend waits for successful configuration before connecting. Only Rust accesses the OS credential store. A supplied app password crosses the inherited input pipe, never command-line arguments. UI runtimes can retain managed string allocations; the app does not claim complete secret-memory erasure. See [browser authentication](browser-authentication.md) for token handling and provider requirements.
+
+Closing windows keeps the host and worker alive. Quit closes the worker cleanly; EOF also stops it. A host crash therefore stops its worker once the pipe closes. This is deliberate per-user application ownership, not an independent OS daemon. `--service` is an internal mode name, not a registered Windows or Linux service. Power state is supplied by the living desktop host; the plain headless CLI has no OS power subscription.
+
+## Windows
+
+`NoriDrive.Windows.csproj` uses actual Microsoft WinUI controls and the stable Windows App SDK package pinned in the project. UI code is C#; the sync implementation remains Rust. A normal debug build is unpackaged and self-contained. Build with `scripts/build-windows.ps1`; use `-RustCorePath <existing.exe>` to supply a separately built worker. `-Platform ARM64` builds the matching Rust MSVC target when the target/toolchain is installed. ARM64 runtime behavior has not been validated.
+
+`-Configuration Release -Package` creates an unsigned MSIX in `apps/windows/AppPackages`. The project refuses packaging if the Rust executable is missing. `Package.appxmanifest` includes desktop full-trust capability and an opt-in startup task. Packaged startup uses Windows StartupTask; unpackaged startup uses HKCU. Package creation never registers, installs or submits the app.
+
+The manifest identity and publisher are **development placeholders**. Before Store submission, reserve the app in Partner Center, copy its exact identity/publisher into the manifest, add actual store metadata/privacy/support information, validate release architectures, and run native interactive acceptance plus the Windows App Certification Kit. Store certification is not implied by a successful build. The app's display name has not been renamed or trademark-cleared. See [Microsoft publishing guidance](https://learn.microsoft.com/en-us/windows/apps/publish/).
+
+The required `windows-build` release job waits for a `windows`-tagged shell runner with .NET 10, Node.js and the Rust MSVC/C++ prerequisites. It separately builds the unpackaged portable desktop app and the unsigned MSIX, using separate intermediate outputs. Release publication waits for Linux and Windows assets. See [releases](releases.md).
+
+## Linux
+
+Qt 6.4+ is supported. `scripts/build-linux.sh [debug|release]` builds Rust and CMake, placing UI/core/CLI together under the Cargo profile directory. Install the matching distribution runtime modules listed in the development guide; the archive does not bundle Qt. On KDE install the Qt 6 desktop style and platform integration packages supplied by the distribution. The frontend respects explicit Qt style overrides. A single Qt frontend cannot also become GTK/libadwaita on GNOME. GNOME users can run it with Qt styling and an appropriate tray host.
+
+Filesystem subscriptions belong to Rust `notify`, not the Linux system bus. The bus carries logind sleep/resume and power-profiles-daemon profile notifications. Missing power-profile support is shown as unavailable, without preventing standby. No inhibitor is registered. Qt/OS native events wake the UI; no continuous UI repaint loop is required.
+
+`scripts/desktop-smoke.sh` uses isolated D-Bus, Xvfb and a StatusNotifier fixture to check close-to-background, tray activation, settings and quit. `--self-test <artifact-directory>` provides an additional offline Qt UI/power-protocol smoke test. Neither test contacts a JMAP account.

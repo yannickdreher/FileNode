@@ -1,52 +1,76 @@
-# Run and debug with VS Code
+# Run and debug
 
 [Deutsch](development.de.md)
 
-Open the **Drive repository folder**, not its parent directory. The checked-in `.vscode` folder provides rust-analyzer and CodeLLDB recommendations, build/test tasks and four F5 launch configurations. These use native debug builds with symbols, not the stripped release downloads.
+Open the NoriDrive repository itself in VS Code. The frontend projects and Rust core have separate launch profiles. Build/debug configuration does not automatically connect to a real account: `scripts/prepare-debug.*` creates an ignored `.dev/profile.toml` with a blank username, autostart disabled and deletion propagation off.
 
-## Prerequisites
+## Extensions
 
-- VS Code with `rust-lang.rust-analyzer` and `vadimcn.vscode-lldb` installed. Accept the workspace recommendations or install them from the Extensions panel.
-- Rust through [rustup](https://rustup.rs/). The repository pins Rust 1.98.1, Clippy, rustfmt and rust-src. Reopen VS Code after installing Rust so it inherits Cargo's PATH.
-- Windows: the MSVC Rust host toolchain, Visual Studio 2022 Build Tools with **Desktop development with C++ / MSVC x64/x86 tools** and a Windows SDK. A Visual Studio installation without the C++ workload is not sufficient. Follow the [official Rust Windows requirements](https://rust-lang.github.io/rustup/installation/windows.html).
-- Linux: the development dependencies listed in the README, a working X11/Wayland desktop, and Secret Service for account credentials. A StatusNotifier host is needed for the tray; GNOME may require an AppIndicator/StatusNotifier extension. The KSNI tray backend does not require GTK or libappindicator libraries.
+The checked-in recommendations use official publishers:
 
-Check in a fresh VS Code terminal:
+- `rust-lang.rust-analyzer`: Rust language tooling, published by the Rust project.
+- `ms-vscode.cpptools`: Microsoft's native debugger (`cppvsdbg` on Windows, `cppdbg`/GDB on Linux).
+- `ms-dotnettools.csharp`: Microsoft's C# debugger (`coreclr`) for WinUI.
+- `ms-vscode.cmake-tools`: Microsoft's CMake integration for the Linux project.
 
-```sh
+The earlier `lldb` profiles were removed. They require the separate third-party extension `vadimcn.vscode-lldb`; it is not needed by the new setup. A debugger extension does not install the Rust compiler or C++ SDK.
+
+## Windows
+
+Install Rust using rustup with MSVC, the matching Visual Studio C++ build tools/Windows SDK, and .NET 10 SDK. Visual Studio without its C++ workload is insufficient for Rust MSVC. The WinUI build obtains Windows App SDK build packages through NuGet. Native WinUI development tooling in Visual Studio is optional when using the provided CLI workflow. Do not enable Developer Mode or install certificates merely to compile an unpackaged build.
+
+1. In **Visual Studio Installer**, select **Modify → Desktop development with C++** for the existing installation, including the x64/x86 MSVC tools and a Windows SDK. See the [MSVC prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html).
+2. [Install Rust through rustup](https://rust-lang.org/tools/install/) using the MSVC toolchain. Cargo is included; it is not a separate installation.
+3. Fully exit and restart VS Code to pick up the updated `PATH`. The first repository build downloads the toolchain pinned in `rust-toolchain.toml`.
+
+```powershell
 rustc --version
 cargo --version
-cargo build --locked
+dotnet --version
+powershell.exe -NoProfile -File scripts/build-windows.ps1
 ```
 
-Toolchain versions are shared by the native developer build and CI. Linux-to-Windows GNU cross-compilation in CI is separate from the recommended native Windows MSVC debugging setup.
+**NoriDrive: Windows existing build (no Cargo required)** launches the existing Windows x64 test build at `.dev/noridrive-preview/noridrive-ui.exe` with F5. It includes the matching Rust worker, so launching it needs neither Cargo nor C++ build tools. This profile opens settings with `.dev/profile.toml`; it does not rebuild source changes and requires the local build with its companion files to exist. Binaries are not checked in. Quit any older instance using the same profile through its tray menu first. Release builds have limited debugging support; Rust breakpoints still require a matching native debug build. The separate output directory avoids locks held by an instance running from the normal build directory.
 
-## F5
+To refresh this preview using an already compiled Windows x64 core:
 
-1. Open `C:\repos\noritec\drive` (or your checkout) in VS Code.
-2. Install the recommended extensions and the prerequisites above.
-3. Place a breakpoint in `src/ui.rs` (`App::update`) or `src/engine.rs` (`sync_with_scanner`).
-4. Choose **Drive: desktop and settings** in Run and Debug and press **F5**.
+```powershell
+powershell.exe -NoProfile -File scripts/build-windows.ps1 -Configuration Release -RustCorePath C:/path/to/noridrive.exe -OutputDirectory .dev/noridrive-preview
+```
 
-The prelaunch task creates `.dev/profile.toml` and `.dev/files` if missing. Existing debug profiles are preserved. Automatic connection, OS autostart and deletion propagation are disabled; the remote folder is named `Noritec Drive Debug`. The profile and files are ignored by Git. A normal F5 run does not use the regular user profile or contact a server until you configure an account and connect. The password remains in the OS keyring, never in `launch.json`.
+The script normalizes the final directory separator in the WinUI output path. Without that separator, `App.xbf` can be embedded under the wrong resource name; the project rejects such a direct `OutputPath` instead of producing a broken build.
 
-Other configurations:
+Run `powershell.exe -NoProfile -File scripts/windows-smoke.ps1` to exercise the existing preview natively: startup, all four settings pages, English/German and quit. It creates its own blank-username profile and connects no account. Results are written to `artifacts/windows-smoke/ui-smoke.json`. This test requires a signed-in Windows desktop session.
 
-- **Drive: background and tray** starts with `--background`. Enable auto-connect in the debug profile after initial account setup to exercise unattended startup. An unconfigured profile stays visible.
-- **Drive: desktop without tray** keeps the window accessible on a desktop without a tray host.
-- **Drive: synchronization integration tests (no account)** runs disposable filesystem/SQLite/mock-server tests. Use a breakpoint in the planner or engine to inspect conflicts and deletion protection without real data.
+Choose **NoriDrive: Windows WinUI (Microsoft C# debugger)** and press F5 to debug the UI. It builds Rust and WinUI, prepares a separate debug profile and opens settings. The Rust worker runs as a child; C# breakpoints do not debug Rust. For core breakpoints use **NoriDrive: Rust core Windows (Microsoft debugger)** with a dedicated test account configured in `.dev/profile.toml`, or attach the Microsoft native debugger to the worker. This profile uses the MSVC build/PDB; GNU cross-build debug info is not a substitute for MSVC debugging.
 
-Use **F10** to step over, **F11** to step into, **Shift+F11** to step out, and **Shift+F5** to stop the debug process. Normal window closing keeps a tray-enabled app running; choose **Quit Noritec Drive** from the menu to exit gracefully. Do not enable OS autostart for a temporary debug binary.
+`-RustCorePath <existing.exe>` lets the build script use a separately compiled core when developing only the UI. On the current workstation a development-only copy can be placed under `.tools/windows-core`; it is ignored and not a dependency of clean checkouts. Do not commit binaries. No claim is made that missing native Rust build prerequisites were installed by building WinUI through NuGet.
 
-The [CodeLLDB manual](https://github.com/vadimcn/codelldb/blob/master/MANUAL.md#cargo-support) documents Cargo-based launch configurations. A built-in task also runs `cargo test --locked --all-targets` and another runs Clippy.
+For an unsigned local package, run the build script with `-Configuration Release -Package`. Compilation and package generation do not install or publish the app. See [packaging](desktop-frontends.md).
 
-## Desktop verification
+## Linux
 
-For an isolated Linux GUI smoke test, install `xvfb xauth openbox xdotool imagemagick dbus-x11 python3-dbus python3-gi libgl1-mesa-dri libxkbcommon-x11-0`, then run:
+On Debian/Ubuntu install the distribution equivalents of:
 
 ```sh
-cargo build --locked --release
-dbus-run-session -- sh scripts/desktop-smoke.sh
+sudo apt install build-essential pkg-config libdbus-1-dev cmake ninja-build gdb \
+  qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window \
+  qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs \
+  qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript
+sh scripts/build-linux.sh
 ```
 
-The test creates a disposable D-Bus StatusNotifier host and X11 display. It verifies actual tray registration, closing to background, activation from the tray, a separate settings viewport, and explicit quit. It never connects an account. Screenshots go to ignored `artifacts/`. CI runs the same smoke test; it does not substitute for a native Windows shell usability check.
+Install Rust 1.98.1 through rustup; the repository pins the toolchain and lockfile. An unlocked Secret Service (for example GNOME Keyring or a compatible KDE Wallet setup) is needed for saved credentials. Qt 6 KDE styling is optional. Wayland/X11 and a StatusNotifier host are needed for normal desktop/tray operation. On GNOME a tray extension may be necessary.
+
+Use **NoriDrive: Linux Qt (GDB)** for the frontend; it disables the tray for convenient window debugging. Use **NoriDrive: Rust core Linux (GDB)** for the headless engine with a disposable test profile/account. `rust-gdb` can provide Rust pretty printers for terminal debugging. These profiles use the standard Cargo target directory; custom `CARGO_TARGET_DIR` values require matching launch paths.
+
+## Account-free verification
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked --all-targets
+cargo check --locked --no-default-features
+```
+
+Tests use temporary files/SQLite, an in-memory remote and loopback HTTP servers. They cover both protocol schemas, conflicts, recovery, failed listings, file locks, settling, budgets, power gates and worker IPC without a live account. Linux UI lifecycle checks are described in [desktop frontends](desktop-frontends.md). A native Windows runner must additionally compile and exercise the WinUI shell and MSIX package before release.

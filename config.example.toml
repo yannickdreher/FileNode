@@ -4,12 +4,24 @@ language = "auto" # auto, en, de
 server = "https://jmap.example.com"
 web_url = "https://mail.example.com"
 username = "user@example.org"
+auth_mode = "app_password" # app_password or browser
+# Browser sign-in uses Authorization Code + PKCE, never a client secret.
+# Default scopes require a server that supports JMAP Files OAuth scopes.
+oauth_issuer = "" # Empty: the JMAP server; external IdPs must also be trusted by Stalwart.
+oauth_client_id = "" # Empty: public dynamic registration, if supported.
+oauth_scopes = "urn:ietf:params:oauth:scope:files offline_access"
+oauth_redirect_port = 0 # Ephemeral; use a fixed registered port for providers such as authentik.
 # account_id = "your-file-account-id" # Only needed when discovery is ambiguous.
-local_folder = "/home/user/Noritec Drive" # Windows: 'C:\Users\user\Noritec Drive'
-remote_folder = "Noritec Drive"
+local_folder = "/home/user/NoriDrive" # Windows: 'C:\Users\user\NoriDrive'
+# The remote top-level folder automatically uses the local folder's name.
 interval_seconds = 30
 full_scan_seconds = 900
-auto_connect = true
+# Payload limits in KiB/s (1024 bytes/s); zero means unlimited.
+upload_limit_kib = 0
+download_limit_kib = 0
+# A changed file must remain unchanged across observations for this duration.
+file_settle_seconds = 2
+pause_on_power_saver = true
 autostart = false
 propagate_deletes = false
 max_delete_count = 20

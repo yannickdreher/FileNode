@@ -58,7 +58,7 @@ pub fn text(language: Language, key: &str) -> &'static str {
 }
 
 /// Keep events unrendered so switching languages also translates past activity.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Message {
     key: &'static str,
     arguments: Vec<(&'static str, String)>,

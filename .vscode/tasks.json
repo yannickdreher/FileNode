@@ -2,7 +2,29 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "drive: prepare debug profile",
+      "label": "noridrive: Windows desktop",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/scripts/build-windows.ps1"],
+      "dependsOn": ["noridrive: prepare debug profile"],
+      "problemMatcher": ["$msCompile"]
+    },
+    {
+      "label": "noridrive: Rust Windows",
+      "type": "process", "command": "cargo",
+      "args": ["build", "--locked", "--target", "x86_64-pc-windows-msvc"],
+      "dependsOn": ["noridrive: prepare debug profile"],
+      "problemMatcher": ["$rustc"]
+    },
+    {
+      "label": "noridrive: Linux desktop",
+      "type": "process", "command": "sh",
+      "args": ["${workspaceFolder}/scripts/build-linux.sh"],
+      "dependsOn": ["noridrive: prepare debug profile"],
+      "problemMatcher": ["$gcc"]
+    },
+    {
+      "label": "noridrive: prepare debug profile",
       "type": "process",
       "command": "sh",
       "args": ["${workspaceFolder}/scripts/prepare-debug.sh"],
@@ -13,7 +35,7 @@
       "problemMatcher": []
     },
     {
-      "label": "drive: build",
+      "label": "noridrive: build",
       "type": "process",
       "command": "cargo",
       "args": ["build", "--locked"],
@@ -21,7 +43,7 @@
       "group": {"kind": "build", "isDefault": true}
     },
     {
-      "label": "drive: tests",
+      "label": "noridrive: tests",
       "type": "process",
       "command": "cargo",
       "args": ["test", "--locked", "--all-targets"],
@@ -29,7 +51,7 @@
       "group": "test"
     },
     {
-      "label": "drive: clippy",
+      "label": "noridrive: clippy",
       "type": "process",
       "command": "cargo",
       "args": ["clippy", "--locked", "--all-targets", "--", "-D", "warnings"],

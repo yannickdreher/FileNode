@@ -1,81 +1,75 @@
-# Noritec Drive
+# NoriDrive
 
-[Deutsch](README.de.md) · English
+English · [Deutsch](README.de.md)
 
-A Rust desktop client for **Stalwart JMAP Files**, with Windows and Linux builds and an English/German interface. This is a **0.1 preview**: a functioning full-file sync client, with automated fault tests, not a production-proven replacement for OneDrive.
+A JMAP Files synchronization client for Windows and Linux. The shared synchronization engine is Rust. Windows has a dedicated **WinUI 3/C#** frontend; Linux has a separate **Qt 6/C++/QML** frontend. UI text is English and German; code and technical diagnostics are English. Version 0.1 remains a preview.
 
-## What works
+## Desktop behavior
 
-The desktop runs from a notification-area icon. Clicking it opens a compact status panel with recent file activity and shortcuts; settings use a separate window. Closing a window keeps synchronization running. Pause/resume and explicit quit are available from the tray and status menus. Optional OS login startup is enabled in General settings; a configured profile can reconnect automatically. If no usable tray host exists, the status window stays accessible.
+The application runs in the signed-in user's session with a tray icon, a compact activity window and a separate settings window. Closing a window keeps synchronization running. Quit stops the application and its Rust worker. No Windows system service or systemd unit is required or installed. Linux needs a StatusNotifier host; GNOME may require an AppIndicator extension. Without a tray, keep the status window open or minimized.
 
-- Bidirectional file and directory synchronization into a dedicated `Noritec Drive` remote folder. Other top-level Bulwark folders are outside this profile.
-- SHA-256 content comparisons and a persistent three-way baseline in SQLite. File timestamps alone never decide whether content changed.
-- Concurrent edits keep both versions: the server version takes the original path, the local version becomes a sibling named `name (conflict <id>).ext` and uploads on the following scan. Type conflicts preserve the local file/tree before rebuilding the server version.
-- Remote renames follow stable FileNode IDs; unambiguous local file renames with unchanged content update remote metadata. More complex local renames fall back to transfer/recovery behavior.
-- Deletions require explicit opt-in. Local removals move remote entries into `.noritec-drive-trash`; remote removals move local entries into `.noritec-drive/history/<id>/`. Remote content replacement also preserves a recovery copy first. No `FileNode/destroy` requests are issued.
-- Global `ifInState` preconditions protect remote mutations. Incomplete scans, missing pinned remote roots, unsupported paths, changed files and mass deletions stop the operation instead of applying a partial destructive plan.
-- Single writer per local folder, durable operation journal, reinspection after ambiguous requests, bounded network timeouts, GUI retry with exponential backoff, resumable downloads and streamed staged uploads.
-- Credentials use Windows Credential Manager or Linux Secret Service; HTTPS only, with same-origin discovery/API/upload/download enforcement.
-- Native filesystem events, debounced bursts, an in-memory metadata/hash cache, periodic full content verification, unchanged-baseline write suppression and a reused JMAP connection in the desktop worker.
-- English and German catalogs, automatic system-language detection, a live language switch, and persisted profile preference. Internal code, diagnostics, protocol values and conflict file names are English.
+Both frontends share `locales/en.json` and `locales/de.json`, the configuration format, OS credential storage and all sync decisions. Linux uses KDE desktop controls when Qt's KDE style/integration packages are available, and otherwise system Qt styling. It does not provide GTK/libadwaita controls on GNOME.
 
-## Start
+## Features
 
-Download the portable archive from the latest successful GitLab pipeline's **test-and-package** artifacts. Extract and run `noritec-drive.exe` on Windows or `./noritec-drive` on Linux. Windows builds are currently unsigned. Linux x86-64 builds target Debian 12/glibc 2.36 or newer and require a graphical X11/Wayland session, OpenGL, D-Bus, `libxkbcommon-x11-0` for X11, and an unlocked Secret Service (for example GNOME Keyring or KDE Wallet with Secret Service enabled).
+- Bidirectional full-file synchronization, SHA-256 comparison, SQLite three-way baselines and a durable operation journal.
+- Both copies survive conflicts; stable remote IDs support remote renames, and unambiguous local file renames preserve server identity.
+- Deletions are opt-in, with mass-deletion limits. Old local versions go to `.noritec-drive/history`; remote versions go to `.noritec-drive-trash`. Remote `FileNode/destroy` is never called.
+- Native file events (`notify`: inotify on Linux, ReadDirectoryChangesW on Windows), debouncing, event-invalidated content hashes, periodic full verification and JMAP `FileNode/changes`.
+- Separate upload/download payload caps in KiB/s, editable while running. Zero disables the cap.
+- Busy files are deferred; changed files must settle across observations before upload. Unrelated top-level file groups can still sync.
+- Desktop power notifications pause work during energy saver/standby; the energy saver preference can be disabled. Resume causes fresh verification. The application never inhibits sleep.
+- HTTPS, origin-checked endpoints and app passwords in Windows Credential Manager or Linux Secret Service.
 
-1. Open **Settings → Account** and enter the JMAP server, email/username, and a **Stalwart app password**. The default server is `https://jmap.example.com`.
-2. In **Sync and recovery**, choose a local folder. It is created if needed. Use a separate folder for each server/account/profile.
-3. Keep deletion propagation disabled for the initial review. Click **Connect & sync**. Initial matching paths with different contents keep both versions.
-4. After reviewing the result, optionally enable deletion propagation while paused. Files are fully downloaded; ensure sufficient disk space for both data and recovery copies.
+## Build and start
 
-The client discovers the JMAP file account. For ambiguous discovery, configure `account_id` in the profile. Authentication currently uses app passwords over HTTPS, not an interactive authentik browser login.
+See [development](docs/development.md) and [desktop architecture/packaging](docs/desktop-frontends.md).
 
-### Configuration and headless usage
+Windows, with Rust MSVC, C++ build tools, .NET 10 and the Windows SDK:
 
-The GUI writes a password-free `config.toml` in the OS user configuration directory (`%APPDATA%\Noritec\Drive\config\` on Windows; `$XDG_CONFIG_HOME/drive/` or `~/.config/drive/` on Linux). Use `--config <path>` for another profile. [config.example.toml](config.example.toml) lists the options; use an existing absolute local folder for headless mode.
-
-```sh
-noritec-drive --settings --language en
-noritec-drive --background --language de
-noritec-drive --headless --config /path/profile.toml --dry-run
-noritec-drive --headless --config /path/profile.toml --once --language en
+```powershell
+powershell.exe -NoProfile -File scripts/build-windows.ps1
+& apps/windows/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64/noridrive-ui.exe
+# Create an unsigned local MSIX; this does not install or submit it:
+powershell.exe -NoProfile -File scripts/build-windows.ps1 -Configuration Release -Package
 ```
 
-Headless mode reads the app password from the OS keyring, or `NORITEC_DRIVE_PASSWORD` when supplied by your secret manager. Never put the password in the command line or TOML. A build with `--no-default-features` only supports headless mode and requires that environment variable. CLI help, JSON plans and technical diagnostics remain English; human-readable synchronization messages follow the selected language.
-
-Windows desktop releases use the GUI subsystem so no extra console stays open. In PowerShell automation, explicitly wait for the process (`Start-Process -Wait`, with output redirection when needed); interactive GUI executables do not always block the calling shell. Native debug builds retain a console for the debugger.
-
-`--dry-run` reads local files and remote state, and may create/update local profile metadata; it does not change user files or remote objects. `--once` completes any conflict/rename follow-up scans before exiting. Headless network errors return a nonzero exit status; a service supervisor can restart the process. The GUI retries automatically.
-
-## Recovery and limits
-
-Local recovery copies remain under `.noritec-drive/history`. Locate the desired version there and copy it back into the sync folder. Remote recovery copies remain in `.noritec-drive-trash` inside the remote sync folder and can be moved/copied back using a JMAP file client such as Bulwark. Stop sync before manually restoring. Recovery folders have no automatic retention cleanup and consume space/quota. These copies do not replace independent backups; another client may permanently delete remote blobs.
-
-Never remove `.noritec-drive` to “fix” a profile: it contains the baseline, journal, resumable transfers and local history. If the pinned remote root disappears, the client deliberately stops; inspect/recover the remote folder before changing the profile.
-
-The client reacts to native filesystem changes after a 600 ms quiet period (2-second maximum debounce), polls remote JMAP changes every 30 seconds by default, and still enumerates the complete local namespace before planning. Unchanged fingerprints reuse in-memory hashes; dirty paths, watcher errors/overflows, reconnects, manual checks and a full verification every 15 minutes invalidate the cache. Without a working watcher, every scan hashes contents again. The desktop reuses its authenticated HTTP client. It uses JMAP `FileNode/changes` after the first snapshot; server push and block-level transfers remain unimplemented. Transfers are serial. Default bounds are 1 GiB per file, 100,000 entries, 200 UTF-8 bytes per file name and 240 bytes per relative path. Windows-reserved names, case/normalization collisions, symlinks/reparse points and special files stop the scan. `.git`, `.noritec-drive` and `.noritec-drive-trash` are excluded. File permissions, ownership, ACLs, alternate streams, hard-link identity and timestamps are not synchronized. Case-only renames on case-insensitive filesystems are not supported reliably yet.
-
-**Not yet implemented:** OneDrive-style files on demand/placeholders, native Explorer integration, Linux virtual filesystem, browser OAuth/SSO, multi-account management UI, selective sync, shared-folder permissions, conflict/restore UI, bandwidth controls, signed installers and automatic updates. A live Stalwart account, interrupted-power scenarios and large multi-device workloads still require acceptance testing. A file can change in the small interval between final verification and rename; the preview does not claim filesystem transactions against other applications.
-
-Wire adapters cover Stalwart **0.16 `nodeType`/`type`** and the newer **`@type`/`mediaType`** schema. Tests exercise both, including actual HTTP serialization. The FileNode specification is still a draft; server-version compatibility must be verified against a test account before enabling production sync.
-
-## Develop
-
-**VS Code F5:** open this repository folder, install Rust plus the recommended rust-analyzer/CodeLLDB extensions, then choose **Drive: desktop and settings**. A separate ignored debug profile is created with auto-connect and deletion propagation disabled. See the [English](docs/development.md) or [German](docs/development.de.md) setup guide for Windows C++/SDK requirements, breakpoints, tray debugging and account-free test debugging.
-
-Code, identifiers, comments and technical documentation use English. Add UI text to **both** `locales/en.json` and `locales/de.json`; use structured messages for worker events so past activity can switch language without changing paths. Catalog tests check matching keys and placeholders.
-
-Rust 1.98.1 is pinned, with dependencies in `Cargo.lock`. On Debian/Ubuntu install `pkg-config libdbus-1-dev libxkbcommon-dev libwayland-dev libegl1-mesa-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev` before building the desktop client.
+Linux, with Qt 6.4+ development/runtime modules and a compiler:
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --locked --all-targets -- -D warnings
-cargo test --locked --all-targets
-cargo check --locked --no-default-features
-cargo run --locked -- --language en
-cargo build --locked --release
+sh scripts/build-linux.sh
+./target/debug/noridrive-ui
 ```
 
-The GitLab pipeline checks formatting, Clippy, core tests and an isolated D-Bus/X11 tray lifecycle smoke test, then packages Linux x86-64 and Windows x86-64 GNU builds. Native Windows builds can use the MSVC Rust toolchain with Visual Studio C++ Build Tools. Automated tests use disposable local folders, SQLite and simulated/loopback JMAP servers; no real accounts are accessed. See [architecture](docs/architecture.md) for invariants and remaining work.
+Merges into `main` run tests, then semantic-release plans a version and changelog. A serialized child pipeline builds Linux and the native Windows app, then publishes the tag, GitLab release and permanent binary downloads. The Windows job requires a runner tagged `windows`; until it is configured, publication waits for that job. See [releases](docs/releases.md).
 
-Protocol references: [JMAP core (RFC 8620)](https://www.rfc-editor.org/rfc/rfc8620), [FileNode draft](https://datatracker.ietf.org/doc/html/draft-ietf-jmap-filenode-18), [Stalwart file storage](https://stalw.art/docs/collaboration/file-storage/).
+## Connect
+
+In settings, configure the JMAP server and username. Defaults are `https://jmap.example.com` for JMAP and `https://mail.example.com` for the web client. Choose **Browser / single sign-on** for OAuth Authorization Code + PKCE or **App password**, then select **Sign in**. Select a dedicated local folder; leave deletion propagation disabled initially. Use a separate folder for each account/profile. See [browser authentication](docs/browser-authentication.md) for server prerequisites and external OIDC providers.
+
+On the Account page, **Sign in** saves the entered settings before authentication. The remote target is automatic: selecting `C:\Users\yannick\Desktop` synchronizes into the top-level remote folder `Desktop`. There is no remote-folder field or account-root selection. Existing local state remains bound to its original remote folder ID; if an older profile used a different name, choose a fresh local folder rather than deleting its state.
+
+The NoriDrive rename preserves the previous profile location, credential service and private state/recovery directory names. Existing configured local/remote folders are not moved or renamed. The GitLab repository is `noritec/noridrive`.
+
+A configured account resumes synchronization when NoriDrive starts. There is no separate startup-resume setting. Browser authentication reuses saved tokens; an interactive browser login still requires the user's sign-in action.
+
+Profiles contain no passwords. Default paths: Windows `%APPDATA%\Noritec\Drive\config\config.toml`; Linux `$XDG_CONFIG_HOME/drive/config.toml` or `~/.config/drive/config.toml`. Use `--config <path>` for a different profile. See [example configuration](config.example.toml). If discovery finds multiple file accounts, specify `account_id`.
+
+```sh
+noridrive --headless --config /absolute/profile.toml --dry-run
+noridrive --headless --config /absolute/profile.toml --once --language en
+```
+
+Headless mode requires an existing absolute local folder and saved credentials. Browser-mode profiles reuse/refresh the desktop session without opening a browser. App-password profiles use the OS keyring or `NORIDRIVE_PASSWORD` supplied by a secret manager (`NORITEC_DRIVE_PASSWORD` remains a compatibility fallback). Never put passwords in command-line arguments or TOML. `--dry-run` can create private local metadata but changes no user files or remote objects. `--once` waits for settling and returns an error if files remain busy/changing beyond twice the settling interval plus 30 seconds; desktop mode continues retrying. Headless mode does not subscribe to desktop power notifications.
+
+## Limits and recovery
+
+This is a full-file preview, not a complete OneDrive replacement. Files on demand, Explorer placeholders, block transfers, remote push, selective sync, multiple-account UI, conflict/restore UI, signed releases and automatic updates remain open. Transfers are serial. Defaults include a 1 GiB file limit, 100,000 entries, 200 UTF-8 bytes per filename and 240 per relative path. Symlinks/reparse points, unsafe names and case/normalization collisions stop scanning. Permissions, ownership, ACLs, alternate streams and timestamps are not synchronized. Case-only renames are not reliably supported.
+
+The complete namespace is still enumerated; cached hashes reduce content reads, not directory-walk complexity. Watcher loss, manual checks, reconnects and periodic verification rehash contents. Settling and locks reduce races but cannot prove that every application has finished writing. Unix locks are advisory. Payload caps exclude TLS/HTTP overhead and socket buffering. [Architecture](docs/architecture.md) describes these boundaries and acceptance work.
+
+Never remove `.noritec-drive` to repair a profile: it holds the baseline, journal, transfers and recovery history. Pause sync before restoring copies. Local recovery lives under `.noritec-drive/history`; remote recovery under `.noritec-drive-trash` can be accessed through a JMAP client such as Bulwark. Recovery has no automatic retention policy and consumes space/quota. Maintain independent backups.
+
+Adapters cover Stalwart 0.16 `nodeType`/`type` and the newer `@type`/`mediaType` FileNode schema. Loopback tests verify both; live Stalwart compatibility, interrupted-power behavior and large multi-device workloads still need acceptance testing.
+
+Protocol references: [JMAP core](https://www.rfc-editor.org/rfc/rfc8620), [FileNode draft](https://datatracker.ietf.org/doc/html/draft-ietf-jmap-filenode-18), [Stalwart file storage](https://stalw.art/docs/collaboration/file-storage/).

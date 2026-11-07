@@ -73,7 +73,7 @@ fn is_reparse(m: &fs::Metadata) -> bool {
 }
 
 pub fn hash_file(path: &Path, max_bytes: u64) -> Result<LocalEntry> {
-    let mut file = File::open(path)?;
+    let mut file = open_snapshot(path)?;
     let before = file.metadata()?;
     if !before.is_file() || before.len() > max_bytes {
         bail!(
@@ -85,6 +85,7 @@ pub fn hash_file(path: &Path, max_bytes: u64) -> Result<LocalEntry> {
     let mut buffer = [0u8; 65536];
     let mut total = 0;
     loop {
+        crate::runtime::check()?;
         let n = file.read(&mut buffer)?;
         if n == 0 {
             break;
@@ -127,6 +128,7 @@ pub(crate) fn scan_with(
         .into_iter()
         .filter_entry(|e| e.depth() == 0 || !ignored(&e.file_name().to_string_lossy()))
     {
+        crate::runtime::check()?;
         let entry = entry
             .context("Read the complete local folder; deletions remain blocked on scan errors")?;
         if entry.depth() == 0 {
@@ -159,6 +161,41 @@ pub(crate) fn scan_with(
         }
     }
     Ok(result)
+}
+
+/// Read-only snapshot handle. Windows denies concurrent writers while it is held;
+/// Unix advisory locks only coordinate with applications honoring those locks.
+pub fn open_snapshot(path: &Path) -> Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.share_mode(0x1 | 0x4); // FILE_SHARE_READ | FILE_SHARE_DELETE
+    }
+    let file = options.open(path)?;
+    fs2::FileExt::try_lock_shared(&file)?;
+    Ok(file)
+}
+
+pub fn stage_snapshot(source: &Path, destination: &Path) -> Result<()> {
+    use std::io::Write;
+    let mut input = open_snapshot(source)?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .open(destination)?;
+    let mut buffer = [0u8; 65536];
+    loop {
+        crate::runtime::check()?;
+        let count = input.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        output.write_all(&buffer[..count])?;
+    }
+    output.sync_all()?;
+    Ok(())
 }
 
 pub fn verify_local(

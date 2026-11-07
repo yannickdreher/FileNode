@@ -1,11 +1,6 @@
-#![cfg_attr(
-    all(windows, feature = "desktop", not(debug_assertions)),
-    windows_subsystem = "windows"
-)]
-
 use anyhow::{Context, Result};
 use clap::Parser;
-use noritec_drive::{
+use noridrive::{
     config::Config,
     engine, filesystem,
     i18n::{Language, Message},
@@ -25,12 +20,10 @@ use std::{
 #[cfg(feature = "desktop")]
 mod autostart;
 #[cfg(feature = "desktop")]
-mod tray;
-#[cfg(feature = "desktop")]
-mod ui;
+mod service;
 
 #[derive(Parser)]
-#[command(version, about = "Noritec Drive — JMAP Files for Windows and Linux")]
+#[command(version, about = "NoriDrive — JMAP Files for Windows and Linux")]
 struct Args {
     /// Run without the desktop interface
     #[arg(long)]
@@ -55,44 +48,54 @@ struct Args {
     /// Disable the tray for debugging or desktops without a status notifier host
     #[arg(long)]
     no_tray: bool,
+    /// Internal JSON-lines worker used by the desktop frontends
+    #[arg(long)]
+    service: bool,
+    #[arg(long, hide = true)]
+    gui_executable: Option<PathBuf>,
+    /// The packaged frontend owns its operating-system startup registration
+    #[arg(long, hide = true)]
+    external_autostart: bool,
 }
 
 fn main() -> Result<()> {
-    // Desktop releases should not leave a console window beside the tray icon.
-    // CLI invocations still attach to the caller's console before producing output.
-    #[cfg(all(windows, feature = "desktop", not(debug_assertions)))]
-    if std::env::args().any(|arg| {
-        matches!(
-            arg.as_str(),
-            "--headless" | "--once" | "--dry-run" | "--help" | "-h" | "--version" | "-V"
-        )
-    }) {
-        unsafe {
-            use windows_sys::Win32::{
-                Foundation::INVALID_HANDLE_VALUE,
-                System::Console::{
-                    AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
-                },
-            };
-            let output = GetStdHandle(STD_OUTPUT_HANDLE);
-            if output.is_null() || output == INVALID_HANDLE_VALUE {
-                AttachConsole(ATTACH_PARENT_PROCESS);
-            }
-        }
-    }
     let args = Args::parse();
     let path = args.config.unwrap_or(Config::default_path()?);
-    if !args.headless && !args.once && !args.dry_run {
+    if args.service {
         #[cfg(feature = "desktop")]
-        return ui::run(
-            path,
-            args.language,
-            args.background,
-            args.settings,
-            args.no_tray,
-        );
+        return service::run(path, args.gui_executable, args.external_autostart);
         #[cfg(not(feature = "desktop"))]
-        anyhow::bail!("This build has no desktop interface. Use --headless or --once.");
+        anyhow::bail!("The desktop service requires the desktop feature");
+    }
+    if !args.headless && !args.once && !args.dry_run {
+        let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
+            "noridrive-ui.exe"
+        } else {
+            "noridrive-ui"
+        });
+        let mut command = std::process::Command::new(executable);
+        if let Some(language) = args.language {
+            let mut config = if path.exists() {
+                Config::load(&path)?
+            } else {
+                Config::default()
+            };
+            config.language = language;
+            config.save(&path)?;
+        }
+        command.arg("--config").arg(&path);
+        if args.background {
+            command.arg("--background");
+        }
+        if args.settings {
+            command.arg("--settings");
+        }
+        if args.no_tray {
+            command.arg("--no-tray");
+        }
+        return command.spawn().map(|_| ()).context(
+            "Desktop frontend is missing; build apps/windows or apps/linux, or use --headless",
+        );
     }
     let mut config = Config::load(&path)
         .with_context(|| format!("Configuration is missing: {}", path.display()))?;
@@ -103,21 +106,30 @@ fn main() -> Result<()> {
     config.validate()?;
     let mut store = Store::open(&config)?;
     let cancel = Arc::new(AtomicBool::new(false));
-    let mut remote = Jmap::connect(&config, password(&config)?, cancel.clone())?;
+    let authentication = if config.auth_mode == noridrive::config::AuthMode::Browser {
+        noridrive::auth::browser_authentication(&config, false, &cancel, |_| {})?
+    } else {
+        noridrive::auth::Authentication::basic(&config.username, password(&config)?)
+    };
+    let mut remote = Jmap::connect_authenticated(&config, authentication, cancel.clone())?;
     let mut scanner =
-        noritec_drive::scanner::LocalScanner::new(&config.local_folder, config.full_scan_seconds);
+        noridrive::scanner::LocalScanner::new(&config.local_folder, config.full_scan_seconds);
     if args.dry_run {
         let local = filesystem::scan(&config.local_folder, config.max_file_bytes)?;
         let snapshot = remote.snapshot(None)?;
+        let remote_folder = config.remote_folder_name()?;
         let root = store.get_meta::<String>("remote_root_id")?.or_else(|| {
             snapshot
                 .nodes
                 .iter()
-                .find(|n| n.parent_id.is_none() && n.name == config.remote_folder)
+                .find(|n| {
+                    n.parent_id.is_none()
+                        && filesystem::folded(&n.name) == filesystem::folded(remote_folder)
+                })
                 .map(|n| n.id.clone())
         });
         let tree = match root {
-            Some(root) => noritec_drive::jmap::scoped_tree(&snapshot, &root)?,
+            Some(root) => noridrive::jmap::scoped_tree(&snapshot, Some(&root))?,
             None => Default::default(),
         };
         println!(
@@ -138,6 +150,8 @@ fn main() -> Result<()> {
             line.render(language)
         )
     };
+    let once_deadline = std::time::Instant::now()
+        + Duration::from_secs(config.file_settle_seconds.saturating_mul(2) + 30);
     loop {
         let report = engine::sync_with_scanner(
             &config,
@@ -162,12 +176,24 @@ fn main() -> Result<()> {
             continue;
         }
         if args.once {
+            if report.deferred > 0 {
+                if std::time::Instant::now() >= once_deadline {
+                    anyhow::bail!("Files remain busy or changing; use the desktop worker for continued retries");
+                }
+                scanner.wait(Duration::from_secs(3));
+                continue;
+            }
             break;
         }
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let deadline = std::time::Instant::now() + Duration::from_secs(config.interval_seconds);
+        let delay = if report.deferred > 0 {
+            3
+        } else {
+            config.interval_seconds
+        };
+        let deadline = std::time::Instant::now() + Duration::from_secs(delay);
         while std::time::Instant::now() < deadline && !scanner.ready() {
             scanner.wait(deadline.saturating_duration_since(std::time::Instant::now()));
         }
@@ -176,6 +202,11 @@ fn main() -> Result<()> {
 }
 
 fn password(config: &Config) -> Result<String> {
+    if let Ok(value) = std::env::var("NORIDRIVE_PASSWORD") {
+        if !value.is_empty() {
+            return Ok(value);
+        }
+    }
     if let Ok(value) = std::env::var("NORITEC_DRIVE_PASSWORD") {
         if !value.is_empty() {
             return Ok(value);

@@ -1,0 +1,18 @@
+{
+  "name": "noridrive-release-tools",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test ci/release/*.test.mjs",
+    "release:plan": "node ci/release/plan.mjs",
+    "release:publish": "semantic-release"
+  },
+  "devDependencies": {
+    "@semantic-release/commit-analyzer": "13.0.1",
+    "@semantic-release/gitlab": "13.3.3",
+    "@semantic-release/release-notes-generator": "14.1.1",
+    "conventional-changelog-conventionalcommits": "8.0.0",
+    "semantic-release": "24.2.9"
+  }
+}
