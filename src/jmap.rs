@@ -418,6 +418,27 @@ impl Jmap {
             .into();
         Ok(result)
     }
+
+    fn read_written_node(&self, expected: Node, state: &str) -> Result<Node> {
+        // Upload IDs can be temporary. Stalwart returns a different linked blob ID
+        // once content belongs to a FileNode. Persist the server's actual identity.
+        let snapshot = self.get_nodes(std::slice::from_ref(&expected.id))?;
+        if snapshot.state != state {
+            bail!("Server changed while confirming the write; reconcile before retrying");
+        }
+        let [node] = snapshot.nodes.as_slice() else {
+            bail!("Written FileNode was not returned exactly once");
+        };
+        if node.id != expected.id
+            || node.name != expected.name
+            || node.parent_id != expected.parent_id
+            || node.kind != expected.kind
+            || (node.kind == Kind::File && node.size != expected.size)
+        {
+            bail!("Written FileNode does not match the requested operation");
+        }
+        Ok(node.clone())
+    }
 }
 
 impl Remote for Jmap {
@@ -580,14 +601,17 @@ impl Remote for Jmap {
         let id = result["created"]["drive"]["id"]
             .as_str()
             .context("Create response has no file ID")?;
-        Ok(Node {
-            id: id.into(),
-            name: name.into(),
-            parent_id: parent.map(str::to_owned),
-            blob_id: blob.map(str::to_owned),
-            kind,
-            size,
-        })
+        self.read_written_node(
+            Node {
+                id: id.into(),
+                name: name.into(),
+                parent_id: parent.map(str::to_owned),
+                blob_id: blob.map(str::to_owned),
+                kind,
+                size,
+            },
+            state,
+        )
     }
 
     fn update(
@@ -614,7 +638,7 @@ impl Remote for Jmap {
             updated.blob_id = Some(blob.into());
             updated.size = size;
         }
-        Ok(updated)
+        self.read_written_node(updated, state)
     }
 }
 
@@ -858,9 +882,130 @@ mod tests {
     }
 
     #[test]
+    fn own_upload_is_not_downloaded_when_the_server_returns_a_linked_blob_id() {
+        use crate::{engine, store::Store};
+        use std::sync::atomic::AtomicUsize;
+        for modern in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let root_name = folder
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            std::fs::write(folder.path().join("a.txt"), b"hello").unwrap();
+            let downloads = Arc::new(AtomicUsize::new(0));
+            let observed = downloads.clone();
+            let mut created = false;
+            let (address, worker) = server(11, move |_, request| {
+                if request.line.starts_with("GET /.well-known/jmap ") {
+                    return response("200 OK", "", &session(modern).to_string());
+                }
+                if request.line.starts_with("POST /upload/") {
+                    return response(
+                        "200 OK",
+                        "",
+                        &json!({"accountId":"account","blobId":"temporary-upload","size":5})
+                            .to_string(),
+                    );
+                }
+                if request.line.starts_with("GET /download/") {
+                    observed.fetch_add(1, Ordering::Relaxed);
+                    return response("200 OK", "", "hello");
+                }
+                let request: Value = serde_json::from_slice(&request.body).unwrap();
+                let call = &request["methodCalls"][0];
+                let method = call[0].as_str().unwrap();
+                let args = &call[1];
+                let state = if created { "2" } else { "1" };
+                let result = match method {
+                    "FileNode/query" => json!({"queryState":"q1","ids":["root"]}),
+                    "FileNode/get" => {
+                        let mut list = Vec::new();
+                        for id in args["ids"].as_array().unwrap() {
+                            let mut node = if id == "root" {
+                                json!({"id":"root","name":root_name,"parentId":null})
+                            } else {
+                                assert!(created);
+                                json!({"id":"file","name":"a.txt","parentId":"root","blobId":"linked-file-content","size":5})
+                            };
+                            node[if modern { "@type" } else { "nodeType" }] =
+                                json!(match (modern, id == "root") {
+                                    (true, true) => "Directory",
+                                    (true, false) => "File",
+                                    (false, true) => "directory",
+                                    (false, false) => "file",
+                                });
+                            list.push(node);
+                        }
+                        json!({"state":state,"list":list,"notFound":[]})
+                    }
+                    "FileNode/set" => {
+                        assert_eq!(args["create"]["drive"]["blobId"], "temporary-upload");
+                        created = true;
+                        json!({"oldState":"1","newState":"2","created":{"drive":{"id":"file"}}})
+                    }
+                    "FileNode/changes" => {
+                        json!({"oldState":args["sinceState"],"newState":"2","hasMoreChanges":false,"created":["file"],"updated":[],"destroyed":[]})
+                    }
+                    _ => panic!("Unexpected method {method}"),
+                };
+                response(
+                    "200 OK",
+                    "",
+                    &json!({"methodResponses":[[method,result,"drive"]]}).to_string(),
+                )
+            });
+            let config = Config {
+                server: address,
+                username: "test@example.org".into(),
+                local_folder: folder.path().into(),
+                file_settle_seconds: 0,
+                ..Config::default()
+            };
+            let cancel = Arc::new(AtomicBool::new(false));
+            let mut remote =
+                Jmap::connect_inner(&config, "secret".into(), cancel.clone(), true).unwrap();
+            let mut store = Store::open(&config).unwrap();
+            // The public engine validates HTTPS. This isolated HTTP transport uses the
+            // same profile identity but no production account or external endpoint.
+            let mut engine_config = config.clone();
+            engine_config.server = "https://jmap.example.com".into();
+            let first = engine::sync(
+                &engine_config,
+                &mut store,
+                &mut remote,
+                &cancel,
+                &mut |_| {},
+            )
+            .unwrap();
+            assert_eq!(first.uploaded, 1);
+            let second = engine::sync(
+                &engine_config,
+                &mut store,
+                &mut remote,
+                &cancel,
+                &mut |_| {},
+            )
+            .unwrap();
+            worker.join().unwrap();
+            assert_eq!(
+                second.downloaded, 0,
+                "an acknowledged upload must not become a download"
+            );
+            assert_eq!(downloads.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                store.baselines().unwrap()["a.txt"].remote_blob.as_deref(),
+                Some("linked-file-content")
+            );
+        }
+    }
+
+    #[test]
     fn http_round_trip_supports_both_schemas_conditional_writes_and_resumed_download() {
         for (modern, bearer) in [(false, false), (true, false), (false, true), (true, true)] {
-            let (address, worker) = server(12, move |index, request| {
+            let (address, worker) = server(14, move |index, request| {
                 assert!(request.headers.contains(if bearer {
                     "authorization: bearer test-token"
                 } else {
@@ -879,11 +1024,11 @@ mod tests {
                         &json!({"accountId":"account","blobId":"uploaded","size":5}).to_string(),
                     );
                 }
-                if index == 8 {
+                if index == 10 {
                     assert!(request.headers.contains("range: bytes=2-"));
                     assert!(request
                         .line
-                        .starts_with("GET /download/account/uploaded/renamed.txt?"));
+                        .starts_with("GET /download/account/linked-updated/renamed.txt?"));
                     return response(
                         "206 Partial Content",
                         "Content-Range: bytes 2-4/5\r\n",
@@ -930,24 +1075,31 @@ mod tests {
                         assert_eq!(node["blobId"], "uploaded");
                         json!({"oldState":"1","newState":"2","created":{"drive":{"id":"new"}}})
                     }
-                    7 => {
+                    8 => {
                         assert_eq!(method, "FileNode/set");
                         assert_eq!(args["ifInState"], "2");
                         assert_eq!(args["update"]["new"]["name"], "renamed.txt");
+                        assert_eq!(args["update"]["new"]["blobId"], "uploaded");
                         json!({"oldState":"2","newState":"3","updated":{"new":null}})
                     }
-                    9 => {
+                    11 => {
                         assert_eq!(method, "FileNode/changes");
                         assert_eq!(args["sinceState"], "1");
                         json!({"oldState":"1","newState":"3","hasMoreChanges":false,"created":["new"],"updated":[],"destroyed":["file"]})
                     }
-                    10 => {
+                    7 | 9 | 12 => {
+                        assert_eq!(method, "FileNode/get");
+                        assert_eq!(args["ids"], json!(["new"]));
                         file["id"] = json!("new");
-                        file["name"] = json!("renamed.txt");
-                        file["blobId"] = json!("uploaded");
-                        json!({"state":"3","list":[file],"notFound":[]})
+                        file["name"] = json!(if index == 7 { "new.txt" } else { "renamed.txt" });
+                        file["blobId"] = json!(if index == 7 {
+                            "linked-created"
+                        } else {
+                            "linked-updated"
+                        });
+                        json!({"state":if index == 7 { "2" } else { "3" },"list":[file],"notFound":[]})
                     }
-                    11 => json!({"state":"3","list":[],"notFound":[]}),
+                    13 => json!({"state":"3","list":[],"notFound":[]}),
                     _ => unreachable!(),
                 };
                 response(
@@ -989,9 +1141,17 @@ mod tests {
                     &mut state,
                 )
                 .unwrap();
+            assert_eq!(node.blob_id.as_deref(), Some("linked-created"));
             let node = remote
-                .update(&node, "renamed.txt", Some("root"), None, &mut state)
+                .update(
+                    &node,
+                    "renamed.txt",
+                    Some("root"),
+                    Some((&blob, 5)),
+                    &mut state,
+                )
                 .unwrap();
+            assert_eq!(node.blob_id.as_deref(), Some("linked-updated"));
             assert_eq!(state, "3");
             let staged = folder.path().join("resumed.part");
             std::fs::write(&staged, b"he").unwrap();
