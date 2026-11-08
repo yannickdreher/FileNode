@@ -282,7 +282,7 @@ internal sealed class DesktopHost
             if (folder is null) return;
             var next = (core.Config["sync_folders"] as JsonArray ?? []).DeepClone().AsArray();
             next.Add(new JsonObject { ["local_folder"] = folder.Path, ["remote_path"] = "" });
-            await core.Apply(new() { ["sync_folders"] = next });
+            await core.Apply(new() { ["sync_folders"] = next }, connect: core.Authenticated);
         }
         catch (Exception exception) { if (pageError is not null) pageError.Text = exception.Message; }
     }

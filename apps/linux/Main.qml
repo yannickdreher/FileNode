@@ -237,7 +237,7 @@ ApplicationWindow {
                 }
             }
         }
-        FolderDialog { id: folderDialog; onAccepted: { let next = (App.config.sync_folders || []).slice(); next.push({local_folder:App.localPath(selectedFolder),remote_path:""}); App.apply({sync_folders:next}) } }
+        FolderDialog { id: folderDialog; onAccepted: { let next = (App.config.sync_folders || []).slice(); next.push({local_folder:App.localPath(selectedFolder),remote_path:""}); App.apply({sync_folders:next}, App.authenticated) } }
     }
     Connections {
         target: App
