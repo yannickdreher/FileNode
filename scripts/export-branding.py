@@ -1,12 +1,13 @@
 """Export the canonical SVG identity to desktop and website assets."""
 from pathlib import Path
+import os
 import shutil
 import subprocess
 
 root = Path(__file__).resolve().parents[1]
 branding = root / "assets" / "branding"
 windows = root / "apps" / "windows" / "Assets"
-renderer = shutil.which("magick") or shutil.which("convert")
+renderer = shutil.which("magick") or (shutil.which("convert") if os.name != "nt" else None)
 svg_renderer = shutil.which("rsvg-convert")
 if not renderer or not svg_renderer:
     raise SystemExit("Install ImageMagick and librsvg (rsvg-convert) to regenerate branding assets.")
