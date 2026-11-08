@@ -13,11 +13,15 @@ Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regel
 ## Funktionen
 
 - Bestätigte Anmeldung getrennt vom Sync-Status jedes Ordners. Pro Datei eine Aktivitätszeile mit echtem Übertragungsfortschritt sowie Erfolgs-/Wiederholungsstatus.
-- Mehrere lokale Ordner pro Konto, automatische Serverpfade relativ zum Benutzerverzeichnis und getrennte Zustände/Wiederholungen je Ordner.
+- Mehrere lokale Ordner pro Konto, Serverordner mit dem Namen der jeweiligen Auswahl und getrennte Zustände/Wiederholungen je Ordner.
 - Vollständige lokale Dateien, bidirektionaler Abgleich, SHA-256-Inhaltsvergleich, SQLite-Dreiwege-Abgleich und dauerhaftes Journal.
 - Bei Konflikten bleiben beide Fassungen erhalten. Remote-Umbenennungen nutzen stabile IDs; eindeutige lokale Dateiumbenennungen erhalten die Server-Identität.
 - Löschungen werden über den gemeinsamen Server-Papierkorb abgeglichen, kompatibel mit Bulwark und mit Schutz vor Massenlöschungen. Kein `FileNode/destroy`. Siehe [Papierkorb-Verhalten](docs/deletions.md).
 - Native Dateisystem-Ereignisse unter Windows und Linux, Bündelung von Änderungen, Hash-Cache, regelmäßige vollständige Kontrolle und JMAP `FileNode/changes`.
+- Bearbeitbare Ausschlüsse für temporäre Dateien, Office-Sperrdateien und unvollständige Downloads, in beide Richtungen ohne Löschung vorhandener Kopien. [Regeln](docs/exclusions.md).
+- Vom Server ermittelte Uploadgrenzen, optionales eigenes Dateilimit und 1–16 parallele Blob-Uploads innerhalb der Servergrenze. Zu große Dateien erhalten eine eigene Warnung; andere Dateien laufen weiter. [Übertragungen](docs/transfers.md).
+- Optionaler JMAP-WebSocket-Push mit Polling-Fallback und erneutem Abgleich nach Verbindungsabbrüchen. Downloads werden fortgesetzt; unterbrochene Uploads beginnen erneut vollständig.
+- Native Diagnose im Windows-Anwendungsereignisprotokoll und Linux-Journal/Syslog sowie auswählbare Fehlerdetails je Ordner. [Diagnose](docs/diagnostics.md).
 - Upload und Download getrennt in KiB/s begrenzen, auch während des Betriebs. Null bedeutet unbegrenzt.
 - Gesperrte Dateien werden zurückgestellt; geänderte Dateien müssen über mehrere Beobachtungen stabil bleiben. Andere oberste Dateigruppen können weiter synchronisieren.
 - Desktop-Energieereignisse pausieren Scans und Übertragungen bei Energiesparen/Standby. Die Energiesparoption ist abschaltbar; nach dem Aufwachen wird neu geprüft. Die App verhindert den Standby nicht.
@@ -49,7 +53,7 @@ Pull Requests führen Linux- und native Windows-Prüfungen in GitHub Actions aus
 
 Unter **Synchronisation** die lokalen Ordner hinzufügen. Unter **Konto** Server und Benutzername eingeben. Vorgaben sind `https://jmap.example.com` für JMAP und `https://mail.example.com` für den Webclient. Als Anmeldemethode **Browser / Single Sign-on** für OAuth Authorization Code mit PKCE oder **App-Passwort** auswählen und anschließend **Anmelden** drücken. Vor dem Verbinden eines Testordners die Einstellung zur Löschweitergabe prüfen. Die [Browser-Anmeldedokumentation](docs/browser-authentication.md) beschreibt Server-Voraussetzungen und externe OIDC-Anbieter.
 
-**Anmelden** speichert die Eingaben vor der Authentifizierung. Serverpfade entstehen relativ zum Benutzerverzeichnis: `C:\Users\Yannick\Desktop` wird zu `/Desktop`, `C:\Users\Yannick\Documents\Büro` zu `/Documents/Büro`. Außerhalb des Benutzerverzeichnisses wird der letzte Ordnername verwendet. Überlappende lokale oder serverseitige Auswahlen werden abgelehnt. Vor dem Hinzufügen oder Beenden eines Ordners pausieren. **Synchronisation beenden** erhält lokale und serverseitige Dateien. Siehe [Ordnerauswahl](docs/folder-selection.md).
+**Anmelden** speichert die Eingaben vor der Authentifizierung. Serverordner verwenden den letzten Namen der Auswahl: `C:\Users\Yannick\Desktop` wird zu `/Desktop`, `C:\Users\Yannick\Dokumente\Steuern` zu `/Steuern`. Überlappende lokale oder serverseitige Auswahlen werden abgelehnt. Ordner und Synchronisationseinstellungen können während des Abgleichs geändert werden. Gespeicherte Änderungen starten den Worker bei Bedarf sicher neu; der Abgleich läuft automatisch weiter. Nach dem Hinzufügen beginnt der Abgleich automatisch, sofern das Konto angemeldet ist. **Synchronisation beenden** erhält lokale und serverseitige Dateien. Siehe [Ordnerauswahl](docs/folder-selection.md).
 
 
 Ein eingerichtetes Konto setzt die Synchronisation beim Start von FileNode fort. Dafür gibt es keine separate Startoption. Die Browser-Authentifizierung verwendet gespeicherte Tokens; eine interaktive Browser-Anmeldung wird weiterhin nur über die Anmeldeaktion gestartet.
@@ -65,7 +69,7 @@ Headless werden absolute Ordnerpfade benötigt. Browser-Profile verwenden und er
 
 ## Grenzen und Wiederherstellung
 
-Noch offen sind Dateien bei Bedarf, Explorer-Platzhalter, Blockübertragungen, Remote-Push, selektive Synchronisation, Mehrkonten-Oberfläche, Konflikt-/Wiederherstellungsdialoge, signierte Releases und automatische Updates. Übertragungen laufen seriell. Standardgrenzen: 1 GiB je Datei, 100.000 Einträge, 200 UTF-8-Bytes je Name und 240 je relativem Pfad. Symlinks/Reparse Points, unsichere Namen und Namenskollisionen stoppen den Scan. Rechte, Eigentümer, ACLs, alternative Datenströme und Zeitstempel werden nicht synchronisiert. Reine Änderungen der Groß-/Kleinschreibung sind noch nicht zuverlässig unterstützt.
+Noch offen sind Dateien bei Bedarf, Explorer-Platzhalter, Blockübertragungen, Upload-Fortsetzung ab beliebiger Byteposition, selektive Synchronisation, Mehrkonten-Oberfläche, Konflikt-/Wiederherstellungsdialoge, signierte Releases und automatische Updates. Blob-Uploads können parallel laufen; Downloads und Änderungen an FileNodes bleiben seriell. Automatisch gilt das Uploadlimit des Servers, bei fehlender Angabe ersatzweise 1 GiB. Weitere Grenzen: 100.000 Einträge, 200 UTF-8-Bytes je Name und 240 je relativem Pfad. Symlinks/Reparse Points, unsichere Namen und Namenskollisionen stoppen den Scan. Rechte, Eigentümer, ACLs, alternative Datenströme und Zeitstempel werden nicht synchronisiert. Reine Änderungen der Groß-/Kleinschreibung sind noch nicht zuverlässig unterstützt.
 
 Der komplette Namensraum wird weiterhin eingelesen; der Cache spart Inhaltszugriffe. Dateisperren und eine Wartezeit reduzieren Rennen, garantieren aber nicht für jedes Programm das Ende eines Schreibvorgangs. Unix-Sperren sind kooperativ. Bandbreitengrenzen betreffen Nutzdaten, nicht TLS-/HTTP-Overhead und Socket-Puffer. Weitere Grenzen stehen in der [Architektur](docs/architecture.md).
 

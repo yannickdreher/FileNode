@@ -10,6 +10,7 @@ use filenode::{
 };
 use serde_json::{json, Value};
 use std::{
+    collections::VecDeque,
     io::{BufRead, Read, Write},
     path::PathBuf,
     sync::{
@@ -25,6 +26,42 @@ use zeroize::{Zeroize, Zeroizing};
 struct Output(Arc<Mutex<std::io::Stdout>>);
 impl Output {
     fn send(&self, event: Value) {
+        use filenode::logger::{self, Level};
+        match event["event"].as_str().unwrap_or("") {
+            "error" => logger::event(
+                Level::Error,
+                310,
+                "worker_error",
+                None,
+                event["details"].as_str().unwrap_or("Unknown worker error"),
+            ),
+            "retry" => logger::event(
+                Level::Warning,
+                200,
+                "connection_retry",
+                None,
+                event["details"].as_str().unwrap_or("Retry scheduled"),
+            ),
+            "account" if event["state"] == "signed_in" => logger::event(
+                Level::Information,
+                110,
+                "account_verified",
+                None,
+                "Authenticated file-account access verified",
+            ),
+            "running" => logger::event(
+                Level::Information,
+                120,
+                "sync_state",
+                None,
+                if event["value"] == true {
+                    "Synchronization started"
+                } else {
+                    "Synchronization stopped"
+                },
+            ),
+            _ => {}
+        }
         if let Ok(mut output) = self.0.lock() {
             let _ = serde_json::to_writer(&mut *output, &event);
             let _ = output.write_all(b"\n");
@@ -51,26 +88,31 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
     let mut policy = Policy::new(&config, Arc::new(AtomicBool::new(false)), power.clone());
     let immediate = Arc::new(AtomicBool::new(false));
     let mut worker: Option<thread::JoinHandle<()>> = None;
+    let mut pending = VecDeque::new();
     output.send(json!({"event":"ready","protocol":4,"config":config}));
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     loop {
-        let mut line = String::new();
-        let size = reader.by_ref().take(1_048_577).read_line(&mut line)?;
-        if size == 0 {
-            break;
-        }
-        if size > 1_048_576 {
+        let mut command = if let Some(command) = pending.pop_front() {
+            command
+        } else {
+            let mut line = String::new();
+            let size = reader.by_ref().take(1_048_577).read_line(&mut line)?;
+            if size == 0 {
+                break;
+            }
+            if size > 1_048_576 {
+                line.zeroize();
+                bail!("Desktop command exceeds size limit");
+            }
+            let parsed = serde_json::from_str::<Value>(&line);
             line.zeroize();
-            bail!("Desktop command exceeds size limit");
-        }
-        let parsed = serde_json::from_str::<Value>(&line);
-        line.zeroize();
-        let mut command = match parsed {
-            Ok(value) => value,
-            Err(error) => {
-                output.send(json!({"event":"error","details":error.to_string()}));
-                continue;
+            match parsed {
+                Ok(value) => value,
+                Err(error) => {
+                    output.send(json!({"event":"error","details":error.to_string()}));
+                    continue;
+                }
             }
         };
         let kind = command["command"].as_str().unwrap_or("").to_owned();
@@ -80,7 +122,20 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
         let result: Result<()> = (|| {
             match kind.as_str() {
                 "configure" => {
-                    let mut next: Config = serde_json::from_value(command["config"].take())?;
+                    // Merge edits against the current configuration, so rapid UI changes
+                    // cannot overwrite each other with stale copies of the whole profile.
+                    let mut value = command["config"].take();
+                    if let Some(patch) = command["patch"].as_object() {
+                        value = serde_json::to_value(&config)?;
+                        for (key, item) in patch {
+                            value[key] = item.clone();
+                        }
+                    }
+                    let mut next: Config = serde_json::from_value(value)?;
+                    filenode::exclusions::Exclusions::new(&next.exclude_patterns)?;
+                    if !(1..=16).contains(&next.parallel_uploads) {
+                        bail!("Parallel uploads must be between 1 and 16");
+                    }
                     next.resolve_folder_paths()?;
                     if next.sync_folders != config.sync_folders {
                         next.normalize_folders(&config)?;
@@ -91,23 +146,19 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     {
                         bail!("Invalid transfer or settling limits");
                     }
-                    if running.load(Ordering::Relaxed)
-                        && (next.server != config.server
-                            || next.username != config.username
-                            || next.account_id != config.account_id
-                            || next.sync_folders != config.sync_folders)
+                    if !(5..=86400).contains(&next.interval_seconds)
+                        || !(60..=86400).contains(&next.full_scan_seconds)
+                        || next.max_delete_percent > 100
                     {
-                        bail!("Pause synchronization before changing the account or folders");
+                        bail!("Invalid scan interval or deletion protection limits");
                     }
-                    if running.load(Ordering::Relaxed)
-                        && (next.auth_mode != config.auth_mode
-                            || next.oauth_issuer != config.oauth_issuer
-                            || next.oauth_client_id != config.oauth_client_id
-                            || next.oauth_scopes != config.oauth_scopes
-                            || next.oauth_redirect_port != config.oauth_redirect_port)
-                    {
-                        bail!("Pause synchronization before changing authentication settings");
-                    }
+                    let account_changed = next.credential_key() != config.credential_key()
+                        || next.auth_mode != config.auth_mode
+                        || next.oauth_credential_key() != config.oauth_credential_key()
+                        || next.account_id != config.account_id;
+                    let connect = command["connect"].as_bool().unwrap_or(false);
+                    let was_running = running.load(Ordering::Relaxed);
+                    let restart = worker_settings_changed(&config, &next)? || connect;
                     if next.autostart != config.autostart && !external_autostart {
                         if let Some(gui) = &gui {
                             crate::autostart::set_executable(next.autostart, &path, gui)?;
@@ -115,17 +166,26 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                             crate::autostart::set(next.autostart, &path)?;
                         }
                     }
-                    let account_changed = next.credential_key() != config.credential_key()
-                        || next.auth_mode != config.auth_mode
-                        || next.oauth_credential_key() != config.oauth_credential_key()
-                        || next.account_id != config.account_id;
+                    // Validate and persist before stopping. Join the old worker before
+                    // any replacement can touch the same folder databases or files.
                     next.save(&path)?;
+                    if restart {
+                        policy.cancel.store(true, Ordering::Relaxed);
+                        if let Some(previous) = worker.take() {
+                            let _ = previous.join();
+                        }
+                    }
                     config = next;
                     if account_changed {
                         output.send(json!({"event":"account","state":"signed_out"}));
                     }
                     policy.configure(&config);
                     output.send(json!({"event":"configured","config":config}));
+                    if connect || (restart && was_running && !account_changed) {
+                        pending.push_back(json!({"command":"connect",
+                            "password":command["password"].take(),
+                            "interactive":command["interactive"].take()}));
+                    }
                 }
                 "connect" => {
                     if running.load(Ordering::Relaxed) {
@@ -242,6 +302,9 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                 if immediate.swap(false, Ordering::Relaxed) {
                                     group.invalidate();
                                 }
+                                if connection.as_ref().is_some_and(Jmap::take_remote_change) {
+                                    group.refresh_remote();
+                                }
                                 if !group.ready() && connection.is_some() {
                                     thread::sleep(Duration::from_millis(250));
                                     continue;
@@ -262,6 +325,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                             .current_state()
                                             .context("Verify file-account access")?;
                                         remote.set_policy(policy.clone());
+                                        output.send(json!({"event":"limits","server":remote.upload_limits(),"effective_max_file_bytes":remote.upload_limits().effective_size(&settings),"effective_parallel_uploads":remote.upload_limits().effective_parallelism(&settings)}));
                                         if let Some(password) = password_to_save.as_ref() {
                                             keyring::Entry::new(
                                                 "FileNode",
@@ -366,4 +430,45 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
         let _ = worker.join();
     }
     Ok(())
+}
+
+fn worker_settings_changed(before: &Config, after: &Config) -> Result<bool> {
+    let mut before = serde_json::to_value(before)?;
+    let mut after = serde_json::to_value(after)?;
+    // These preferences are either presentation-only or updated through shared Policy.
+    for key in [
+        "language",
+        "web_url",
+        "autostart",
+        "upload_limit_kib",
+        "download_limit_kib",
+        "pause_on_power_saver",
+    ] {
+        before.as_object_mut().unwrap().remove(key);
+        after.as_object_mut().unwrap().remove(key);
+    }
+    Ok(before != after)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_rules_restart_the_worker_but_shared_preferences_do_not() {
+        let before = Config::default();
+        let mut after = before.clone();
+        after.upload_limit_kib = 128;
+        after.pause_on_power_saver = false;
+        after.web_url = "https://web.example.org".into();
+        assert!(!worker_settings_changed(&before, &after).unwrap());
+        after.propagate_deletes = !before.propagate_deletes;
+        assert!(worker_settings_changed(&before, &after).unwrap());
+        after = before.clone();
+        after.parallel_uploads += 1;
+        assert!(worker_settings_changed(&before, &after).unwrap());
+        after = before.clone();
+        after.exclude_patterns.push("Cache".into());
+        assert!(worker_settings_changed(&before, &after).unwrap());
+    }
 }

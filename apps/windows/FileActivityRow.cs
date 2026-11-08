@@ -28,7 +28,8 @@ internal sealed class FileActivityRow
         var state = item.Active ? item.Operation == "upload" ? "uploading" : item.Operation == "download" ? "downloading" : "working" : item.State;
         detail.Text = core.T("activity." + state) + (item.Active && item.Total > 0 ? $" · {item.Percent:0}%" : "");
         if (item.State == "synced" && item.Operation == "trash") detail.Text = core.T("activity.trashed");
-        if (item.State is "retrying" or "warning" or "blocked") detail.Foreground = new SolidColorBrush(Colors.DarkOrange); else detail.ClearValue(TextBlock.ForegroundProperty);
+        if (item.State == "too_large") detail.Text = core.T("activity.too_large").Replace("{size}", CoreClient.FormatBytes((ulong)item.Total)).Replace("{limit}", CoreClient.FormatBytes(item.Limit));
+        if (item.State is "retrying" or "warning" or "blocked" or "too_large") detail.Foreground = new SolidColorBrush(Colors.DarkOrange); else detail.ClearValue(TextBlock.ForegroundProperty);
         progress.Visibility = item.Active ? Visibility.Visible : Visibility.Collapsed; progress.IsIndeterminate = item.Active && item.Total == 0; progress.Value = item.Percent;
         time.Text = Path.GetFileName(item.Folder.TrimEnd(Path.DirectorySeparatorChar)) + " · " + item.Updated.ToString("t");
         ToolTipService.SetToolTip(Root, Path.Combine(item.Folder, item.Path.Replace('/', Path.DirectorySeparatorChar)));

@@ -53,6 +53,8 @@ pub struct Config {
     pub max_delete_count: usize,
     pub max_delete_percent: usize,
     pub max_file_bytes: u64,
+    pub parallel_uploads: usize,
+    pub exclude_patterns: Vec<String>,
     pub device_name: String,
 }
 
@@ -85,7 +87,9 @@ impl Default for Config {
             propagate_deletes: true,
             max_delete_count: 20,
             max_delete_percent: 25,
-            max_file_bytes: 1024 * 1024 * 1024,
+            max_file_bytes: 0,
+            parallel_uploads: 2,
+            exclude_patterns: crate::exclusions::defaults(),
             device_name: std::env::var("COMPUTERNAME")
                 .or_else(|_| std::env::var("HOSTNAME"))
                 .unwrap_or_else(|_| "Desktop".into()),
@@ -99,6 +103,7 @@ impl Config {
         self.validate_folders()
     }
     pub fn validate_account(&self) -> Result<()> {
+        crate::exclusions::Exclusions::new(&self.exclude_patterns)?;
         let url = Url::parse(&self.server).context("Invalid server URL")?;
         if url.scheme() != "https" || url.host_str().is_none() {
             bail!("The server must use HTTPS");
@@ -133,7 +138,7 @@ impl Config {
         if self.interval_seconds < 5 || self.interval_seconds > 86400 {
             bail!("Check interval must be between 5 and 86400 seconds");
         }
-        if self.max_delete_percent > 100 || self.max_file_bytes == 0 {
+        if self.max_delete_percent > 100 || !(1..=16).contains(&self.parallel_uploads) {
             bail!("Invalid protection limits");
         }
         if self.full_scan_seconds < 60 || self.full_scan_seconds > 86400 {
@@ -216,23 +221,11 @@ impl Config {
     pub fn derive_remote_path(local: &Path, home: &Path) -> Result<String> {
         let local = local.canonicalize().unwrap_or_else(|_| local.to_path_buf());
         let home = home.canonicalize().unwrap_or_else(|_| home.to_path_buf());
-        let relative = local
-            .strip_prefix(&home)
-            .ok()
-            .filter(|path| !path.as_os_str().is_empty());
-        let path = relative
-            .map(Path::to_path_buf)
-            .or_else(|| local.file_name().map(PathBuf::from))
-            .context("Select a named folder, not a filesystem root")?;
-        let components = path
-            .components()
-            .map(|part| {
-                part.as_os_str()
-                    .to_str()
-                    .context("Folder name must be Unicode")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let remote = components.join("/");
+        let remote = local
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("Select a named Unicode folder, not a filesystem root")?
+            .to_owned();
         Self::validate_remote_path(&remote)?;
         if local == home {
             bail!(
@@ -321,6 +314,15 @@ impl Config {
             Ok(self.remote_folder_name()?.to_owned())
         } else {
             Ok(self.resolved_remote_path.clone())
+        }
+    }
+
+    /// Zero means no additional user size cap. Uploads still obey discovery.
+    pub fn file_limit(&self) -> u64 {
+        if self.max_file_bytes == 0 {
+            u64::MAX
+        } else {
+            self.max_file_bytes
         }
     }
 

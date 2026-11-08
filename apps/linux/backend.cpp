@@ -74,12 +74,6 @@ void Backend::receive() {
         const auto type = event.value("event").toString();
         if (type == "configured") m_error.clear();
         if (type == "ready" || type == "configured" || event.contains("config")) { m_config = event.value("config").toObject().toVariantMap(); emit configChanged(); }
-        if (type == "configured" && m_connectAfterSave) {
-            m_connectAfterSave = false;
-            send({{"command","connect"},{"password",m_pendingPassword},{"interactive",m_pendingInteractive}});
-            m_pendingInteractive = false;
-            m_pendingPassword.fill(QChar(0)); m_pendingPassword.clear();
-        }
         if (type == "ready") {
             if (event.value("protocol").toInt() != 4) { m_error = "Incompatible Rust worker protocol"; emit changed(); continue; }
             m_ready = true; publishPower();
@@ -93,10 +87,13 @@ void Backend::receive() {
         else if (type == "report") {
             auto report = event.value("report").toObject(); m_error.clear();
             m_status = report.value("failed_folders").toInt() > 0 ? "status.folder_error" : report.value("deferred").toInt() > 0 ? "status.deferred" : report.value("blocked").toInt() > 0 ? "status.deletions_blocked" : "status.current";
+        } else if (type == "limits") { m_limits = event.toVariantMap(); }
+        else if (type == "file_limit") {
+            auto entry = event.toVariantMap(); entry["state"] = "too_large"; entry["operation"] = "upload"; entry["completed"] = 0; entry["total"] = entry.value("size"); m_activity.upsert(entry);
         } else if (type == "account") {
             m_account = event.value("state").toString();
             if (event.contains("trash_url")) m_trashUrl = event.value("trash_url").toString();
-            if (m_account == "signed_out") { m_activity.clear(); m_folders.clear(); m_trashUrl.clear(); }
+            if (m_account == "signed_out") { m_activity.clear(); m_folders.clear(); m_trashUrl.clear(); m_limits.clear(); }
             if (m_account == "failed") m_activity.requireSignIn();
         } else if (type == "folder") { m_folders[event.value("folder").toString()] = event.toVariantMap(); if (event.value("state") == "current") m_activity.verifiedFolder(event.value("folder").toString()); }
         else if (type == "renamed") m_activity.renamed(event.value("folder").toString(), event.value("from").toString(), event.value("to").toString());
@@ -105,17 +102,14 @@ void Backend::receive() {
             if (event.value("state") == "transferring") m_folders[event.value("folder").toString()] = QVariantMap{{"state","syncing"}};
         } else if (type == "error" || type == "retry") {
             if (m_account == "checking") m_account = "failed";
-            m_connectAfterSave = false; m_pendingPassword.fill(QChar(0)); m_pendingPassword.clear(); m_error = event.value("details").toString(); m_status = "status.retry";
+            m_error = event.value("details").toString(); m_status = "status.retry";
         } else if (type == "power") { m_powerPaused = event.value("paused").toBool(); if (m_powerPaused) m_status = "status.power_paused"; }
         updateTray(); emit changed();
     }
 }
 void Backend::apply(const QVariantMap &values, bool connectAccount, QString password, bool interactive) {
-    auto next = m_config; for (auto item = values.begin(); item != values.end(); ++item) next.insert(item.key(), item.value());
-    m_connectAfterSave = connectAccount;
-    m_pendingInteractive = interactive;
-    m_pendingPassword = password;
-    send({{"command","configure"},{"config",QJsonObject::fromVariantMap(next)}});
+    send({{"command","configure"},{"patch",QJsonObject::fromVariantMap(values)},
+          {"connect",connectAccount},{"password",password},{"interactive",interactive}});
     password.fill(QChar(0));
 }
 void Backend::start() { send({{"command","connect"}}); }
@@ -139,6 +133,19 @@ void Backend::openTrash() {
 QString Backend::folderStatus(const QString &folder) const {
     const auto state = !authenticated() ? "not_connected" : !m_running ? "paused" : m_powerPaused ? "power_paused" : m_folders.value(folder).toMap().value("state", "checking").toString();
     return translate("folder." + QString(state));
+}
+QString Backend::formatBytes(double bytes) const {
+    const QStringList units{"B", "KiB", "MiB", "GiB", "TiB"}; int unit = 0;
+    while (bytes >= 1024 && unit < units.size() - 1) { bytes /= 1024; unit++; }
+    return QLocale(language()).toString(bytes, 'f', unit == 0 ? 0 : 2) + " " + units[unit];
+}
+QString Backend::limitsSummary() const {
+    if (m_limits.isEmpty()) return translate("settings.limits_unknown");
+    const auto server = m_limits.value("server").toMap(); const auto own = m_config.value("max_file_bytes").toULongLong();
+    auto cap = server.value("max_size_upload").isNull() ? own == 0 ? 1073741824ULL : own : server.value("max_size_upload").toULongLong();
+    if (own > 0) cap = qMin(cap, own);
+    const auto count = qMin(m_config.value("parallel_uploads", 2).toInt(), qBound(1, server.value("max_concurrent_upload", 1).toInt(), 16));
+    return translate("settings.limits_summary").replace("{size}", formatBytes(cap)).replace("{count}", QString::number(count));
 }
 void Backend::quit() { m_quitting = true; send({{"command","quit"}}); if (m_core.state() == QProcess::NotRunning) qApp->quit(); }
 QPoint Backend::popupPosition(int width, int height) const {

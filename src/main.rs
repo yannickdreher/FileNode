@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use filenode::{
     config::Config,
-    engine, filesystem,
+    engine,
     group::SyncGroup,
     i18n::{Language, Message},
     jmap::{Jmap, Remote},
@@ -57,10 +57,32 @@ struct Args {
     /// The packaged frontend owns its operating-system startup registration
     #[arg(long, hide = true)]
     external_autostart: bool,
+    /// Write a native Event Log/journal test entry without accessing an account
+    #[arg(long)]
+    test_log: bool,
 }
 
 fn main() -> Result<()> {
+    filenode::logger::init();
+    let result = run();
+    if let Err(error) = &result {
+        filenode::logger::event(
+            filenode::logger::Level::Error,
+            399,
+            "process_error",
+            None,
+            &format!("{error:#}"),
+        );
+    }
+    result
+}
+
+fn run() -> Result<()> {
     let args = Args::parse();
+    if args.test_log {
+        filenode::logger::self_test().context("Write native diagnostic test")?;
+        return Ok(());
+    }
     let path = args.config.unwrap_or(Config::default_path()?);
     if args.service {
         #[cfg(feature = "desktop")]
@@ -112,13 +134,21 @@ fn main() -> Result<()> {
         filenode::auth::Authentication::basic(&config.username, password(&config)?)
     };
     let mut remote = Jmap::connect_authenticated(&config, authentication, cancel.clone())?;
+    if !args.dry_run {
+        remote.start_push();
+    }
     if args.dry_run {
         let snapshot = remote.snapshot(None)?;
         let mut plans = Vec::new();
         for folder in config.folder_configs()? {
             folder.validate()?;
             let store = Store::open(&folder)?;
-            let local = filesystem::scan(&folder.local_folder, folder.max_file_bytes)?;
+            let mut scanner = filenode::scanner::LocalScanner::new(
+                &folder.local_folder,
+                folder.full_scan_seconds,
+            );
+            scanner.set_exclusions(&folder.exclude_patterns)?;
+            let mut local = scanner.scan(remote.upload_limits().effective_size(&folder))?;
             let root = match store.get_meta::<String>("remote_root_id")? {
                 Some(root) => {
                     if !snapshot.nodes.iter().any(|node| {
@@ -130,11 +160,21 @@ fn main() -> Result<()> {
                 }
                 None => engine::find_folder_path(&snapshot, &folder.remote_folder_path()?)?,
             };
-            let tree = match root {
+            let mut tree = match root {
                 Some(root) => filenode::jmap::scoped_tree(&snapshot, Some(&root))?,
                 None => Default::default(),
             };
-            plans.push(serde_json::json!({"local_folder":folder.local_folder,"remote_path":folder.remote_folder_path()?,"actions":planner::plan(&local,&tree,&store.baselines()?,&folder)?}));
+            let mut base = store.baselines()?;
+            let protected = filenode::exclusions::Exclusions::new(&folder.exclude_patterns)?.scope(
+                &mut local,
+                &mut tree,
+                &mut base,
+                scanner.omitted_paths().chain(scanner.oversized().keys()),
+            );
+            local.retain(|path, _| !scanner.oversized().contains_key(path));
+            tree.retain(|path, _| !scanner.oversized().contains_key(path));
+            base.retain(|path, _| !scanner.oversized().contains_key(path));
+            plans.push(serde_json::json!({"local_folder":folder.local_folder,"remote_path":folder.remote_folder_path()?,"actions":planner::plan_protected(&local,&tree,&base,&folder,&protected)?}));
         }
         println!("{}", serde_json::to_string_pretty(&plans)?);
         return Ok(());
@@ -165,6 +205,9 @@ fn main() -> Result<()> {
         if report.failed_folders > 0 && args.once {
             anyhow::bail!("One or more folders could not synchronize; see the folder errors above");
         }
+        if report.limited > 0 && args.once {
+            anyhow::bail!("Some files exceed the effective upload limit and were not uploaded");
+        }
         if report.needs_rescan {
             continue;
         }
@@ -182,6 +225,10 @@ fn main() -> Result<()> {
             break;
         }
         while !group.ready() && !cancel.load(Ordering::Relaxed) {
+            if remote.take_remote_change() {
+                group.refresh_remote();
+                break;
+            }
             std::thread::sleep(Duration::from_millis(250));
         }
     }

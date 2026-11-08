@@ -4,11 +4,24 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
+using System.Runtime.InteropServices;
 
 namespace FileNode.Windows;
 
 internal static class WindowChrome
 {
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(nint window, uint attribute, ref uint value, uint size);
+
+    public static void ThemeBorder(Window window, bool dark, bool popup = false)
+    {
+        var handle = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        uint immersiveDark = dark ? 1u : 0u;
+        _ = DwmSetWindowAttribute(handle, 20, ref immersiveDark, sizeof(uint));
+        // A tray panel draws its own rounded outline; suppress the extra DWM border.
+        uint border = popup ? 0xFFFFFFFEu : dark ? 0x00464646u : 0x00D7D7D7u;
+        _ = DwmSetWindowAttribute(handle, 34, ref border, sizeof(uint));
+    }
     // Keep the OS caption buttons and Snap behavior, with the XAML theme behind them.
     public static void SetContent(Window window, UIElement content, string title)
     {
@@ -23,6 +36,7 @@ internal static class WindowChrome
         void Theme()
         {
             var dark = root.ActualTheme == ElementTheme.Dark; var caption = window.AppWindow.TitleBar;
+            ThemeBorder(window, dark);
             root.Background = new SolidColorBrush(dark ? ColorHelper.FromArgb(255, 32, 32, 32) : ColorHelper.FromArgb(255, 243, 243, 243));
             caption.ButtonBackgroundColor = Colors.Transparent; caption.ButtonInactiveBackgroundColor = Colors.Transparent;
             caption.ButtonForegroundColor = dark ? Colors.White : Colors.Black;

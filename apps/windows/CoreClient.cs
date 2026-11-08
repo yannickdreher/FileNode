@@ -15,6 +15,7 @@ internal sealed class FileActivity
     public string Operation { get; set; } = "check";
     public long Completed { get; set; }
     public long Total { get; set; }
+    public ulong Limit { get; set; }
     public DateTimeOffset Updated { get; set; } = DateTimeOffset.Now;
     public bool Active => State == "transferring";
     public double Percent => Total > 0 ? Math.Clamp(100d * Completed / Total, 0, 100) : 0;
@@ -29,10 +30,20 @@ internal sealed class CoreClient : IAsyncDisposable
     private readonly Dictionary<string, string> german;
     private Process? process;
     private bool stopping;
-    private string? pendingPassword;
-    private bool connectAfterSave;
-    private bool pendingInteractive;
     public JsonObject Config { get; private set; } = new();
+    public JsonObject Limits { get; private set; } = new();
+    public string LimitsSummary {
+        get {
+            if (Limits.Count == 0) return T("settings.limits_unknown");
+            var own = Unsigned(Config["max_file_bytes"]);
+            var cap = Limits["server"]?["max_size_upload"] is JsonNode advertised ? Unsigned(advertised) : own == 0 ? 1073741824UL : own;
+            if (own > 0) cap = Math.Min(cap, own);
+            var count = Math.Min(Number("parallel_uploads", 2), (int)Math.Clamp(Unsigned(Limits["server"]?["max_concurrent_upload"], 1), 1UL, 16UL));
+            return T("settings.limits_summary").Replace("{size}", FormatBytes(cap)).Replace("{count}", count.ToString());
+        }
+    }
+    public static ulong Unsigned(JsonNode? value, ulong fallback = 0) => ulong.TryParse(value?.ToString(), out var number) ? number : fallback;
+    public static string FormatBytes(ulong bytes) { var size = (double)bytes; var units = new[] { "B", "KiB", "MiB", "GiB", "TiB" }; int unit = 0; while (size >= 1024 && unit < units.Length - 1) { size /= 1024; unit++; } return $"{size:0.##} {units[unit]}"; }
     public List<FileActivity> Activity { get; } = [];
     public Dictionary<string, JsonObject> FolderStatuses { get; } = [];
     public string AccountState { get; private set; } = "signed_out";
@@ -80,6 +91,7 @@ internal sealed class CoreClient : IAsyncDisposable
         if (!App.IsPackaged) { start.ArgumentList.Add("--gui-executable"); start.ArgumentList.Add(Environment.ProcessPath!); }
         else start.ArgumentList.Add("--external-autostart");
         if (profile is not null) { start.ArgumentList.Add("--config"); start.ArgumentList.Add(profile); }
+        if (App.SelfTestDirectory is not null) start.Environment["FILENODE_LOG"] = "off";
         try
         {
             process = Process.Start(start) ?? throw new IOException("Rust worker could not start");
@@ -130,7 +142,14 @@ internal sealed class CoreClient : IAsyncDisposable
                 break;
             case "configured":
                 Error = "";
-                if (connectAfterSave) { var password = pendingPassword; pendingPassword = null; connectAfterSave = false; _ = Send("connect", new() { ["password"] = password ?? "", ["interactive"] = pendingInteractive }); pendingInteractive = false; }
+                break;
+            case "limits": Limits = message.DeepClone().AsObject(); break;
+            case "file_limit":
+                var limitedFolder = message["folder"]!.ToString(); var limitedPath = message["path"]!.ToString();
+                var limited = Activity.Find(item => item.Folder == limitedFolder && item.Path == limitedPath);
+                if (limited is null) { limited = new() { Folder = limitedFolder, Path = limitedPath }; Activity.Insert(0, limited); }
+                limited.State = "too_large"; limited.Operation = "upload"; limited.Total = message["size"]!.GetValue<long>(); limited.Limit = Unsigned(message["limit"]);
+                if (Activity.Count > 100) Activity.RemoveAt(100);
                 break;
             case "open_browser":
                 if (Uri.TryCreate(message["url"]?.ToString(), UriKind.Absolute, out var browserUrl) && browserUrl.Scheme == "https" && browserUrl.UserInfo == "")
@@ -142,7 +161,7 @@ internal sealed class CoreClient : IAsyncDisposable
             case "running": Running = message["value"]!.GetValue<bool>(); StatusKey = Running ? "status.connecting" : "status.paused"; break;
             case "account":
                 AccountState = message["state"]!.ToString(); TrashUrl = message["trash_url"]?.ToString() ?? TrashUrl;
-                if (AccountState == "signed_out") { Activity.Clear(); FolderStatuses.Clear(); TrashUrl = ""; }
+                if (AccountState == "signed_out") { Activity.Clear(); FolderStatuses.Clear(); TrashUrl = ""; Limits = new(); }
                 if (AccountState == "failed") foreach (var pending in Activity.Where(item => item.Active || item.State == "retrying")) pending.State = "auth_required";
                 break;
             case "folder":
@@ -174,7 +193,7 @@ internal sealed class CoreClient : IAsyncDisposable
                 StatusKey = report["failed_folders"]?.GetValue<int>() > 0 ? "status.folder_error" : report["deferred"]!.GetValue<int>() > 0 ? "status.deferred" : report["blocked"]!.GetValue<int>() > 0 ? "status.deletions_blocked" : "status.current"; break;
             case "retry": case "error":
                 if (AccountState == "checking") AccountState = "failed";
-                pendingPassword = null; connectAfterSave = false; Error = message["details"]?.ToString() ?? "Unknown Rust worker error"; StatusKey = "status.retry"; break;
+                Error = message["details"]?.ToString() ?? "Unknown Rust worker error"; StatusKey = "status.retry"; break;
             case "power": PowerPaused = message["paused"]!.GetValue<bool>(); if (PowerPaused) StatusKey = "status.power_paused"; break;
         }
         Changed?.Invoke(configChanged);
@@ -192,10 +211,7 @@ internal sealed class CoreClient : IAsyncDisposable
     }
     public async Task Apply(JsonObject changes, bool connect = false, string? password = null, bool interactive = false)
     {
-        var next = Config.DeepClone().AsObject();
-        foreach (var pair in changes) next[pair.Key] = pair.Value?.DeepClone();
-        connectAfterSave = connect; pendingPassword = password; pendingInteractive = interactive;
-        await Send("configure", new() { ["config"] = next });
+        await Send("configure", new() { ["patch"] = changes.DeepClone(), ["connect"] = connect, ["password"] = password ?? "", ["interactive"] = interactive });
     }
     public Task Power(bool saver, bool sleeping, bool available)
     {
@@ -204,7 +220,7 @@ internal sealed class CoreClient : IAsyncDisposable
     }
     public async ValueTask DisposeAsync()
     {
-        stopping = true; pendingPassword = null;
+        stopping = true;
         if (process is { HasExited: false })
         {
             await Send("quit");

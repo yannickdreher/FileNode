@@ -10,3 +10,5 @@
 .hero{overflow:clip}
 
 @media(max-width:480px){.navigation .source-link{display:none}}
+
+.development{border-top:1px solid #d9dfd0}.development .section-heading{max-width:760px}.development .section-heading>p:last-child{line-height:1.9;color:#66715d}.development-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:34px;margin:32px 0}.development-grid h3{font-size:20px;line-height:1.35}.development-grid p{font-size:13px;line-height:1.9;color:#66715d}@media(max-width:760px){.development-grid{grid-template-columns:1fr;gap:10px}}

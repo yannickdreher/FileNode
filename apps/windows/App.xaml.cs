@@ -25,7 +25,7 @@ public partial class App : Application
     }
     internal static void RecordSelfTestFailure(Exception exception)
     {
-        if (SelfTestDirectory is not string directory) return;
+        if (SelfTestDirectory is not string directory) { Logger.Unhandled(exception); return; }
         Directory.CreateDirectory(directory);
         File.WriteAllText(Path.Combine(directory, "ui-smoke.json"), System.Text.Json.JsonSerializer.Serialize(new
         { passed = false, stage = selfTestStage, exception = exception.GetType().FullName, hresult = $"0x{exception.HResult:X8}", message = exception.Message, stack = exception.StackTrace }));

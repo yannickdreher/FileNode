@@ -74,6 +74,7 @@ class Backend : public QObject {
     Q_PROPERTY(bool authenticated READ authenticated NOTIFY changed)
     Q_PROPERTY(bool powerPaused READ powerPaused NOTIFY changed)
     Q_PROPERTY(QVariantMap folderStatuses READ folderStatuses NOTIFY changed)
+    Q_PROPERTY(QString limitsSummary READ limitsSummary NOTIFY changed)
     Q_PROPERTY(QString language READ language NOTIFY configChanged)
     Q_PROPERTY(bool trayAvailable READ trayAvailable NOTIFY changed)
     Q_PROPERTY(bool powerAvailable READ powerAvailable NOTIFY changed)
@@ -93,6 +94,8 @@ public:
     bool authenticated() const { return m_account == "signed_in"; }
     bool powerPaused() const { return m_powerPaused; }
     QVariantMap folderStatuses() const { return m_folders; }
+    QString limitsSummary() const;
+    Q_INVOKABLE QString formatBytes(double bytes) const;
     Q_INVOKABLE QString folderStatus(const QString &folder) const;
     QString language() const;
     bool trayAvailable() const { return m_trayAvailable; }
@@ -131,6 +134,7 @@ private:
     QVariantMap m_config;
     ActivityModel m_activity;
     QVariantMap m_folders;
+    QVariantMap m_limits;
     QString m_account = "signed_out", m_trashUrl;
     bool m_powerPaused = false;
     QJsonObject m_en, m_de;
@@ -140,7 +144,4 @@ private:
     PowerMonitor m_power;
     bool m_running = false, m_ready = false, m_trayAvailable = false, m_background = false, m_quitting = false;
     QString m_status = "status.ready", m_error;
-    bool m_connectAfterSave = false;
-    bool m_pendingInteractive = false;
-    QString m_pendingPassword;
 };

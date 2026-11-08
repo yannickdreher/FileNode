@@ -13,6 +13,12 @@ use std::{
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    FileLimit {
+        folder: String,
+        path: String,
+        size: u64,
+        limit: u64,
+    },
     Renamed {
         folder: String,
         from: String,
@@ -32,6 +38,23 @@ pub enum Event {
         retry_seconds: u64,
         details: String,
     },
+}
+pub fn size_limit(path: &str, size: u64, limit: u64) {
+    CURRENT.with(|current| {
+        let mut current = current.borrow_mut();
+        if current.notices >= 100 {
+            return;
+        }
+        current.notices += 1;
+        if let Some(sink) = &current.sink {
+            sink(Event::FileLimit {
+                folder: current.folder.clone(),
+                path: path.into(),
+                size,
+                limit,
+            });
+        }
+    });
 }
 type Sink = Arc<dyn Fn(Event) + Send + Sync>;
 pub fn renamed(from: &str, to: &str) {
@@ -55,7 +78,17 @@ struct Context {
 }
 thread_local! { static CURRENT: RefCell<Context> = RefCell::new(Context::default()); }
 pub struct Scope(Context);
+#[derive(Clone)]
+pub struct Captured(Context);
+impl Captured {
+    pub fn enter(&self) -> Scope {
+        Scope(CURRENT.with(|current| current.replace(self.0.clone())))
+    }
+}
 impl Scope {
+    pub fn capture() -> Captured {
+        Captured(CURRENT.with(|current| current.borrow().clone()))
+    }
     pub fn observe(sink: impl Fn(Event) + Send + Sync + 'static) -> Self {
         Self(CURRENT.with(|current| {
             current.replace(Context {
@@ -168,6 +201,9 @@ pub struct FileActivity {
 }
 impl FileActivity {
     pub fn begin(path: &str, operation: &str, total: u64) -> Self {
+        Self::begin_at(path, operation, total, 0)
+    }
+    pub fn begin_at(path: &str, operation: &str, total: u64, completed: u64) -> Self {
         let (previous, transfer) = CURRENT.with(|current| {
             let mut current = current.borrow_mut();
             let transfer = current.sink.as_ref().map(|sink| {
@@ -177,7 +213,7 @@ impl FileActivity {
                     path: path.into(),
                     operation: operation.into(),
                     total,
-                    completed: AtomicU64::new(0),
+                    completed: AtomicU64::new(completed),
                     closed: AtomicBool::new(false),
                     last: Mutex::new(Instant::now()),
                 })

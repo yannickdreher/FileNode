@@ -1,12 +1,22 @@
 use crate::{config::Config, model::*};
 use anyhow::{bail, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 pub fn plan(
     local: &LocalTree,
     remote: &RemoteTree,
     base: &Baselines,
     config: &Config,
+) -> Result<Vec<Action>> {
+    plan_protected(local, remote, base, config, &HashSet::new())
+}
+
+pub fn plan_protected(
+    local: &LocalTree,
+    remote: &RemoteTree,
+    base: &Baselines,
+    config: &Config,
+    protected: &HashSet<String>,
 ) -> Result<Vec<Action>> {
     let paths: BTreeSet<_> = local
         .keys()
@@ -72,6 +82,15 @@ pub fn plan(
                     Action::Blocked(path.clone())
                 }
             }
+        };
+        let action = if protected.contains(&path)
+            && !matches!(
+                action,
+                Action::CreateLocalDir(_) | Action::CreateRemoteDir(_) | Action::Accept(_)
+            ) {
+            Action::Blocked(path.clone())
+        } else {
+            action
         };
         if matches!(action, Action::Blocked(_) | Action::Conflict(_)) {
             blocked_trees.push(path.clone());

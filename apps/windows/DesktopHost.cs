@@ -23,11 +23,13 @@ internal sealed class DesktopHost
     private MenuFlyoutItem toggle = null!;
     private readonly Dictionary<(string, string), FileActivityRow> activityRows = [];
     private readonly List<(string Folder, TextBlock Label)> statusFolders = [], pageFolders = [];
+    private readonly List<(string Folder, Expander Details, TextBlock Text)> folderErrors = [];
     private InfoBar? accountStatus;
+    private TextBlock? limitsInfo;
     private bool quitting, background, powerPublished;
     private string renderedLanguage = "";
     private NavigationView? navigation;
-    private readonly List<Control> pausedControls = [];
+    private readonly List<Control> editableControls = [];
     private TextBlock? pageError;
     private Button? accountAction;
     private Func<string>? accountActionLabel;
@@ -106,7 +108,7 @@ internal sealed class DesktopHost
         Link(0, "action.open", Symbol.Folder, OpenSelectedFolders); Link(1, "action.online", Symbol.World, OpenOnline); Link(2, "action.trash", Symbol.Delete, OpenTrash);
         Grid.SetRow(footer, 2); root.Children.Add(header); root.Children.Add(scroll); root.Children.Add(footer);
         var frame = new Border { Child = root, CornerRadius = new CornerRadius(10), BorderThickness = new Thickness(1) };
-        void Theme() { var dark = frame.ActualTheme == ElementTheme.Dark; frame.Background = new SolidColorBrush(dark ? ColorHelper.FromArgb(255, 32, 32, 32) : ColorHelper.FromArgb(255, 250, 250, 250)); frame.BorderBrush = new SolidColorBrush(dark ? ColorHelper.FromArgb(255, 70, 70, 70) : ColorHelper.FromArgb(255, 215, 215, 215)); }
+        void Theme() { var dark = frame.ActualTheme == ElementTheme.Dark; frame.Background = new SolidColorBrush(dark ? ColorHelper.FromArgb(255, 32, 32, 32) : ColorHelper.FromArgb(255, 250, 250, 250)); WindowChrome.ThemeBorder(status, dark, popup: tray.Available); frame.BorderBrush = new SolidColorBrush(dark ? ColorHelper.FromArgb(255, 70, 70, 70) : ColorHelper.FromArgb(255, 215, 215, 215)); }
         frame.ActualThemeChanged += (_, _) => Theme(); frame.Loaded += (_, _) => Theme(); status.Content = frame; Theme();
         renderedLanguage = core.Language;
     }
@@ -118,9 +120,11 @@ internal sealed class DesktopHost
         account.Text = core.Authenticated ? core.Text("username") : core.T("account.not_connected");
         summary.Text = core.AccountStatus; error.Text = core.Error == "" ? "" : core.T("error.summary"); error.Visibility = core.Error == "" ? Visibility.Collapsed : Visibility.Visible;
         toggle.Text = core.T(core.Running ? "action.pause" : "action.start"); toggle.IsEnabled = core.Ready;
-        foreach (var control in pausedControls) control.IsEnabled = !core.Running;
+        foreach (var control in editableControls) control.IsEnabled = core.Ready && core.AccountState != "checking";
         foreach (var (folder, label) in statusFolders.Concat(pageFolders)) { label.Text = core.FolderStatus(folder); ToolTipService.SetToolTip(label, core.FolderStatuses.GetValueOrDefault(folder)?["details"]?.ToString() ?? ""); }
-        if (accountAction is not null && accountActionLabel is not null) { accountAction.Content = core.T(accountActionLabel()); accountAction.IsEnabled = core.Ready && !core.Running && core.AccountState != "checking"; accountAction.Visibility = core.Authenticated && core.Running ? Visibility.Collapsed : Visibility.Visible; }
+        UpdateFolderErrors();
+        if (limitsInfo is not null) limitsInfo.Text = core.LimitsSummary;
+        if (accountAction is not null && accountActionLabel is not null) { accountAction.Content = core.T(accountActionLabel()); accountAction.IsEnabled = core.Ready && core.AccountState != "checking"; accountAction.Visibility = Visibility.Visible; }
         if (accountStatus is not null) { accountStatus.Title = core.AccountStatus; accountStatus.Message = core.Authenticated ? core.Text("username") : ""; accountStatus.Severity = core.Authenticated ? InfoBarSeverity.Success : core.AccountState == "failed" ? InfoBarSeverity.Error : InfoBarSeverity.Informational; }
         if (pageError is not null) pageError.Text = core.Error;
         if (core.Activity.Count == 0) {
@@ -144,7 +148,7 @@ internal sealed class DesktopHost
     public void ShowStatus()
     {
         if (status.AppWindow.Presenter is OverlappedPresenter presenter)
-        { presenter.IsMaximizable = false; presenter.IsResizable = false; }
+        { presenter.IsMaximizable = false; presenter.IsResizable = false; if (tray.Available) presenter.SetBorderAndTitleBar(false, false); }
         var area = DisplayArea.GetFromWindowId(status.AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         status.AppWindow.Move(new PointInt32(area.X + area.Width - status.AppWindow.Size.Width - 12, area.Y + area.Height - status.AppWindow.Size.Height - 12));
         status.Activate(); status.AppWindow.Show();
@@ -204,8 +208,8 @@ internal sealed class DesktopHost
     }
     private void ShowPage(int index, string title)
     {
-        refreshFolders = null; pageFolders.Clear(); accountStatus = null;
-        pausedControls.Clear(); accountAction = null; accountActionLabel = null;
+        refreshFolders = null; pageFolders.Clear(); folderErrors.Clear(); accountStatus = null; limitsInfo = null;
+        editableControls.Clear(); accountAction = null; accountActionLabel = null;
         var panel = new StackPanel { Spacing = 18, Margin = new Thickness(28), MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Stretch };
         panel.Children.Add(Label(title, 28));
         if (index == 0) SyncPage(panel);
@@ -218,8 +222,8 @@ internal sealed class DesktopHost
     }
     private TextBox Field(StackPanel panel, string key, string setting)
     {
-        var field = new TextBox { Header = core.T(key), Text = core.Text(setting), IsEnabled = !core.Running };
-        panel.Children.Add(field); pausedControls.Add(field); return field;
+        var field = new TextBox { Header = core.T(key), Text = core.Text(setting), IsEnabled = core.Ready && core.AccountState != "checking" };
+        panel.Children.Add(field); editableControls.Add(field); return field;
     }
     private ToggleSwitch Switch(StackPanel panel, string key, string setting, bool fallback = false)
     {
@@ -237,9 +241,9 @@ internal sealed class DesktopHost
         panel.Children.Add(rows);
         refreshFolders = () =>
         {
-            foreach (var control in folderControls) pausedControls.Remove(control);
+            foreach (var control in folderControls) editableControls.Remove(control);
             folderControls.Clear();
-            rows.Children.Clear(); pageFolders.Clear();
+            rows.Children.Clear(); pageFolders.Clear(); folderErrors.Clear();
             var folders = core.Config["sync_folders"] as JsonArray ?? [];
             if (folders.Count == 0) rows.Children.Add(Label("settings.no_folders"));
             for (int i = 0; i < folders.Count; i++)
@@ -253,26 +257,45 @@ internal sealed class DesktopHost
                 var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
                 actions.Children.Add(Button("action.open", () => Open(path)));
                 var state = new TextBlock { Text = core.FolderStatus(path), FontSize = 13 }; content.Children.Add(state); pageFolders.Add((path, state));
+                var detailsText = new TextBlock { TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true };
+                var details = new Expander { Header = core.T("error.details"), Content = detailsText, HorizontalAlignment = HorizontalAlignment.Stretch };
+                folderErrors.Add((path, details, detailsText)); content.Children.Add(details);
                 var remove = Button("settings.remove_folder", () => { var next = (core.Config["sync_folders"] as JsonArray ?? []).DeepClone().AsArray(); next.RemoveAt(selected); _ = core.Apply(new() { ["sync_folders"] = next }); });
-                remove.IsEnabled = !core.Running;
-                pausedControls.Add(remove); folderControls.Add(remove); actions.Children.Add(remove); content.Children.Add(actions);
+                remove.IsEnabled = core.Ready && core.AccountState != "checking";
+                editableControls.Add(remove); folderControls.Add(remove); actions.Children.Add(remove); content.Children.Add(actions);
                 rows.Children.Add(new Border { Child = content, Padding = new Thickness(16), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Gray) });
             }
+            UpdateFolderErrors();
         };
         refreshFolders();
         var add = Button("settings.add_folder", () => _ = AddFolder());
-        add.IsEnabled = !core.Running; pausedControls.Add(add); panel.Children.Add(add);
+        add.IsEnabled = core.Ready && core.AccountState != "checking"; editableControls.Add(add); panel.Children.Add(add);
         panel.Children.Add(Label("settings.stop_hint"));
-        var deletes = new ToggleSwitch { Header = core.T("settings.deletes"), IsOn = core.Flag("propagate_deletes"), IsEnabled = !core.Running }; panel.Children.Add(deletes); pausedControls.Add(deletes);
+        var deletes = new ToggleSwitch { Header = core.T("settings.deletes"), IsOn = core.Flag("propagate_deletes"), IsEnabled = core.Ready && core.AccountState != "checking" }; panel.Children.Add(deletes); editableControls.Add(deletes);
+        var patterns = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, Height = 180, Text = string.Join("\n", (core.Config["exclude_patterns"] as JsonArray ?? []).Select(item => item!.ToString())), IsEnabled = core.Ready && core.AccountState != "checking" };
+        editableControls.Add(patterns);
+        var exclusions = new StackPanel { Spacing = 12 }; exclusions.Children.Add(Label("settings.exclusions_hint")); exclusions.Children.Add(patterns);
+        panel.Children.Add(new Expander { Header = core.T("settings.exclusions"), Content = exclusions, HorizontalAlignment = HorizontalAlignment.Stretch });
+        var maxFile = new NumberBox { Header = core.T("settings.max_file_size"), Minimum = 0, Maximum = 16777216, Value = Math.Ceiling((double)CoreClient.Unsigned(core.Config["max_file_bytes"]) / 1048576), IsEnabled = core.Ready && core.AccountState != "checking", SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+        var parallel = new NumberBox { Header = core.T("settings.parallel_uploads"), Minimum = 1, Maximum = 16, Value = core.Number("parallel_uploads", 2), IsEnabled = core.Ready && core.AccountState != "checking", SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
+        panel.Children.Add(maxFile); panel.Children.Add(parallel); editableControls.Add(maxFile); editableControls.Add(parallel);
+        limitsInfo = new TextBlock { Text = core.LimitsSummary, TextWrapping = TextWrapping.Wrap }; panel.Children.Add(limitsInfo);
         panel.Children.Add(Label("settings.bandwidth", 20)); Rate(panel, "settings.download_limit", "download_limit_kib"); Rate(panel, "settings.upload_limit", "upload_limit_kib");
         Switch(panel, "settings.pause_power", "pause_on_power_saver", true);
-        var save = Button("settings.save", () => _ = core.Apply(new() { ["propagate_deletes"] = deletes.IsOn }));
-        save.IsEnabled = !core.Running; panel.Children.Add(save); pausedControls.Add(save);
+        var save = Button("settings.save", () => _ = core.Apply(new() { ["propagate_deletes"] = deletes.IsOn, ["exclude_patterns"] = new JsonArray(patterns.Text.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Select(item => (JsonNode?)JsonValue.Create(item)).ToArray()), ["max_file_bytes"] = double.IsFinite(maxFile.Value) ? (ulong)Math.Round(maxFile.Value) * 1048576 : 0, ["parallel_uploads"] = double.IsFinite(parallel.Value) ? (int)parallel.Value : 2 }));
+        save.IsEnabled = core.Ready && core.AccountState != "checking"; panel.Children.Add(save); editableControls.Add(save);
         if (core.Running) panel.Children.Add(Label("settings.pause_hint"));
+    }
+    private void UpdateFolderErrors()
+    {
+        foreach (var (folder, details, text) in folderErrors) {
+            text.Text = core.FolderStatuses.GetValueOrDefault(folder)?["details"]?.ToString() ?? "";
+            details.Visibility = text.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
     }
     private async Task AddFolder()
     {
-        if (core.Running || settings is null) return;
+        if (settings is null) return;
         try
         {
             var picker = new global::Windows.Storage.Pickers.FolderPicker();
@@ -311,10 +334,10 @@ internal sealed class DesktopHost
     {
         accountStatus = new InfoBar { IsOpen = true, IsClosable = false, Title = core.AccountStatus, Message = core.Authenticated ? core.Text("username") : "", Severity = core.Authenticated ? InfoBarSeverity.Success : InfoBarSeverity.Informational }; panel.Children.Add(accountStatus);
         var server = Field(panel, "settings.server", "server"); var web = Field(panel, "settings.web", "web_url"); var username = Field(panel, "settings.username", "username");
-        var mode = new ComboBox { Header = core.T("settings.authentication"), ItemsSource = new[] { core.T("settings.auth_password"), core.T("settings.auth_browser") }, SelectedIndex = core.Text("auth_mode") == "browser" ? 1 : 0, IsEnabled = !core.Running };
-        panel.Children.Add(mode); pausedControls.Add(mode);
+        var mode = new ComboBox { Header = core.T("settings.authentication"), ItemsSource = new[] { core.T("settings.auth_password"), core.T("settings.auth_browser") }, SelectedIndex = core.Text("auth_mode") == "browser" ? 1 : 0, IsEnabled = core.Ready && core.AccountState != "checking" };
+        panel.Children.Add(mode); editableControls.Add(mode);
         var credentials = new StackPanel { Spacing = 12 };
-        var password = new PasswordBox { Header = core.T("settings.password"), PlaceholderText = core.T("settings.password_hint"), IsEnabled = !core.Running }; credentials.Children.Add(password); pausedControls.Add(password); credentials.Children.Add(Label("settings.credentials")); panel.Children.Add(credentials);
+        var password = new PasswordBox { Header = core.T("settings.password"), PlaceholderText = core.T("settings.password_hint"), IsEnabled = core.Ready && core.AccountState != "checking" }; credentials.Children.Add(password); editableControls.Add(password); credentials.Children.Add(Label("settings.credentials")); panel.Children.Add(credentials);
         var provider = new StackPanel { Spacing = 12 };
         provider.Children.Add(Label("settings.browser_hint"));
         var issuer = Field(provider, "settings.oauth_issuer", "oauth_issuer");
@@ -323,8 +346,8 @@ internal sealed class DesktopHost
         var advanced = new Expander { Header = core.T("settings.oauth_advanced"), HorizontalAlignment = HorizontalAlignment.Stretch };
         var oauth = new StackPanel { Spacing = 12 };
         var scopes = Field(oauth, "settings.oauth_scopes", "oauth_scopes");
-        var port = new NumberBox { Header = core.T("settings.oauth_port"), Minimum = 0, Maximum = 65535, Value = core.Number("oauth_redirect_port"), IsEnabled = !core.Running };
-        oauth.Children.Add(port); pausedControls.Add(port);
+        var port = new NumberBox { Header = core.T("settings.oauth_port"), Minimum = 0, Maximum = 65535, Value = core.Number("oauth_redirect_port"), IsEnabled = core.Ready && core.AccountState != "checking" };
+        oauth.Children.Add(port); editableControls.Add(port);
         advanced.Content = oauth; provider.Children.Add(advanced); panel.Children.Add(provider);
         JsonObject Values() => new() { ["server"] = server.Text, ["web_url"] = web.Text, ["username"] = username.Text,
             ["auth_mode"] = mode.SelectedIndex == 1 ? "browser" : "app_password", ["oauth_issuer"] = issuer.Text,
@@ -332,11 +355,10 @@ internal sealed class DesktopHost
         accountActionLabel = () => core.AccountState == "checking" ? "account.checking" : core.Authenticated ? "account.signin_again" : "action.signin";
         accountAction = Button(accountActionLabel(), () =>
         {
-            if (core.Running) return;
             _ = core.Apply(Values(), true, mode.SelectedIndex == 1 ? null : password.Password, mode.SelectedIndex == 1); password.Password = "";
         });
         accountAction.Style = (Style)Application.Current.Resources["AccentButtonStyle"];
-        accountAction.IsEnabled = core.Ready && !core.Running;
+        accountAction.IsEnabled = core.Ready && core.AccountState != "checking";
         void UpdateMode()
         {
             provider.Visibility = mode.SelectedIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
@@ -344,7 +366,7 @@ internal sealed class DesktopHost
             accountAction.Content = core.T(accountActionLabel());
         }
         mode.SelectionChanged += (_, _) => UpdateMode(); UpdateMode();
-        accountAction.Visibility = core.Authenticated && core.Running ? Visibility.Collapsed : Visibility.Visible;
+        accountAction.Visibility = Visibility.Visible;
         panel.Children.Add(accountAction);
     }
     private void GeneralPage(StackPanel panel)
@@ -435,8 +457,20 @@ internal sealed class DesktopHost
             if (!core.Authenticated || accountStatus?.Title != core.T("account.signed_in") || accountAction?.Content?.ToString() == core.T("action.pause")) throw new InvalidOperationException("Account status is mixed with synchronization controls");
             await Capture(settings!, directory, language + "-account.png");
             navigation.SelectedItem = navigation.MenuItems[0]; await Task.Delay(150);
+            if (editableControls.Any(control => !control.IsEnabled)) throw new InvalidOperationException("Sync settings were disabled while synchronization was running");
             if (pageFolders.Count != 2 || pageFolders[0].Label.Text == pageFolders[1].Label.Text) throw new InvalidOperationException("Folder states are not independent");
+            var folderError = folderErrors.Single(item => item.Folder == second);
+            if (folderError.Details.Visibility != Visibility.Visible || folderError.Text.Text != "Offline test fixture") throw new InvalidOperationException("Folder error details are not accessible");
+            folderError.Details.IsExpanded = true;
+            await Task.Delay(250); // Let the native Expander's reveal animation complete.
             await Capture(settings!, directory, language + "-folders.png");
+            core.Receive(new() { ["event"] = "folder", ["folder"] = second, ["state"] = "current" });
+            if (folderError.Details.Visibility != Visibility.Collapsed) throw new InvalidOperationException("Resolved folder error details stayed visible");
+            core.Receive(new() { ["event"] = "limits", ["server"] = new JsonObject { ["max_size_upload"] = 10485760L, ["max_concurrent_upload"] = 4 }, ["effective_max_file_bytes"] = 10485760L, ["effective_parallel_uploads"] = 2 });
+            for (int repeat = 0; repeat < 2; repeat++) core.Receive(new() { ["event"] = "file_limit", ["folder"] = first, ["path"] = "Large archive.zip", ["size"] = 20971520L, ["limit"] = 10485760L });
+            if (core.Activity.Count(item => item.Path == "Large archive.zip") != 1 || core.Activity.Single(item => item.Path == "Large archive.zip").State != "too_large") throw new InvalidOperationException("File-size warnings are missing or duplicated");
+            core.Receive(new() { ["event"] = "folder", ["folder"] = first, ["state"] = "limited" });
+            await Capture(status, directory, language + "-size-limit.png");
             core.Receive(new() { ["event"] = "running", ["value"] = false });
             if (!core.Authenticated) throw new InvalidOperationException("Pausing sync signed out the account");
             core.Receive(new() { ["event"] = "account", ["state"] = "signed_out" });

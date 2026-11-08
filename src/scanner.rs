@@ -11,7 +11,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, RwLock,
     },
     time::{Duration, Instant, SystemTime},
 };
@@ -64,6 +64,7 @@ struct Pending {
 
 #[derive(Default)]
 struct Signals {
+    exclusions: RwLock<Option<Arc<crate::exclusions::Exclusions>>>,
     pending: Mutex<Pending>,
     wake: Condvar,
     failed: AtomicBool,
@@ -84,6 +85,15 @@ impl Signals {
                         Some(relative) => {
                             let relative = relative.replace(std::path::MAIN_SEPARATOR, "/");
                             if filesystem::ignored(&relative) {
+                                continue;
+                            }
+                            if self
+                                .exclusions
+                                .read()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .as_ref()
+                                .is_some_and(|rules| rules.matches(&relative))
+                            {
                                 continue;
                             }
                             relevant = true;
@@ -130,6 +140,10 @@ pub struct LocalScanner {
     observed: HashMap<String, (Fingerprint, Instant)>,
     deferred: HashSet<String>,
     settle: Duration,
+    exclude_patterns: Vec<String>,
+    exclusions: Arc<crate::exclusions::Exclusions>,
+    omitted: HashSet<String>,
+    oversized: HashMap<String, u64>,
 }
 
 impl LocalScanner {
@@ -155,11 +169,37 @@ impl LocalScanner {
             observed: HashMap::new(),
             deferred: HashSet::new(),
             settle: Duration::ZERO,
+            exclude_patterns: Vec::new(),
+            exclusions: Arc::new(
+                crate::exclusions::Exclusions::new(&[]).expect("Empty exclusion rules"),
+            ),
+            omitted: HashSet::new(),
+            oversized: HashMap::new(),
         }
     }
 
     pub fn set_settle_seconds(&mut self, seconds: u64) {
         self.settle = Duration::from_secs(seconds);
+    }
+
+    pub fn set_exclusions(&mut self, patterns: &[String]) -> Result<()> {
+        if self.exclude_patterns != patterns {
+            self.exclusions = Arc::new(crate::exclusions::Exclusions::new(patterns)?);
+            *self
+                .signals
+                .exclusions
+                .write()
+                .unwrap_or_else(|e| e.into_inner()) = Some(self.exclusions.clone());
+            self.exclude_patterns = patterns.to_vec();
+            self.invalidate();
+        }
+        Ok(())
+    }
+    pub fn omitted_paths(&self) -> impl Iterator<Item = &String> {
+        self.omitted.iter()
+    }
+    pub fn oversized(&self) -> &HashMap<String, u64> {
+        &self.oversized
     }
     pub fn deferred_roots(&self) -> Vec<String> {
         // An unresolved child also protects its ancestors from being deleted or moved.
@@ -210,56 +250,68 @@ impl LocalScanner {
         }
         self.hashed_files = 0;
         self.deferred.clear();
-        let result = filesystem::scan_with(&self.root, |path, relative| {
-            let before = fingerprint(path)?;
-            if before.length > max_bytes {
-                bail!("File exceeds size limit: {relative}");
-            }
-            if let Some((old, entry)) = self.cache.get(relative) {
-                if old == &before {
-                    return Ok(entry.clone());
+        self.omitted.clear();
+        self.oversized.clear();
+        let result = filesystem::scan_excluding(
+            &self.root,
+            &self.exclusions,
+            &mut self.omitted,
+            |path, relative| {
+                let before = fingerprint(path)?;
+                if before.length > max_bytes {
+                    self.oversized.insert(relative.to_owned(), before.length);
+                    return Ok(LocalEntry {
+                        kind: crate::model::Kind::File,
+                        hash: "oversized".into(),
+                        size: before.length,
+                    });
                 }
-            }
-            let observed = self
-                .observed
-                .entry(relative.to_owned())
-                .or_insert((before.clone(), Instant::now()));
-            if observed.0 != before {
-                *observed = (before.clone(), Instant::now());
-            }
-            let unsettled = observed.1.elapsed() < self.settle;
-            let entry = if unsettled {
-                None
-            } else {
-                match filesystem::hash_file(path, max_bytes) {
-                    Ok(entry) => Some(entry),
-                    Err(error) => {
-                        crate::runtime::check()?;
-                        let _ = error;
-                        None
+                if let Some((old, entry)) = self.cache.get(relative) {
+                    if old == &before {
+                        return Ok(entry.clone());
                     }
                 }
-            };
-            let Some(entry) = entry else {
-                self.deferred.insert(relative.to_owned());
-                return Ok(self
-                    .cache
-                    .get(relative)
-                    .map(|(_, entry)| entry.clone())
-                    .unwrap_or(LocalEntry {
-                        kind: crate::model::Kind::File,
-                        hash: "deferred".into(),
-                        size: before.length,
-                    }));
-            };
-            if fingerprint(path)? != before {
-                bail!("File changed during scanning: {relative}");
-            }
-            self.hashed_files += 1;
-            self.cache
-                .insert(relative.to_owned(), (before, entry.clone()));
-            Ok(entry)
-        });
+                let observed = self
+                    .observed
+                    .entry(relative.to_owned())
+                    .or_insert((before.clone(), Instant::now()));
+                if observed.0 != before {
+                    *observed = (before.clone(), Instant::now());
+                }
+                let unsettled = observed.1.elapsed() < self.settle;
+                let entry = if unsettled {
+                    None
+                } else {
+                    match filesystem::hash_file(path, max_bytes) {
+                        Ok(entry) => Some(entry),
+                        Err(error) => {
+                            crate::runtime::check()?;
+                            let _ = error;
+                            None
+                        }
+                    }
+                };
+                let Some(entry) = entry else {
+                    self.deferred.insert(relative.to_owned());
+                    return Ok(self
+                        .cache
+                        .get(relative)
+                        .map(|(_, entry)| entry.clone())
+                        .unwrap_or(LocalEntry {
+                            kind: crate::model::Kind::File,
+                            hash: "deferred".into(),
+                            size: before.length,
+                        }));
+                };
+                if fingerprint(path)? != before {
+                    bail!("File changed during scanning: {relative}");
+                }
+                self.hashed_files += 1;
+                self.cache
+                    .insert(relative.to_owned(), (before, entry.clone()));
+                Ok(entry)
+            },
+        );
         match result {
             Ok(tree) => {
                 self.cache.retain(|path, _| tree.contains_key(path));
@@ -369,6 +421,12 @@ mod tests {
         scanner.signals.event(
             root.path(),
             Ok(Event::new(EventKind::Any).add_path(root.path().join(".filenode/state.sqlite"))),
+        );
+        assert!(scanner.signals.pending.lock().unwrap().last_event.is_none());
+        scanner.set_exclusions(&["*.tmp".into()]).unwrap();
+        scanner.signals.event(
+            root.path(),
+            Ok(Event::new(EventKind::Any).add_path(root.path().join("download.tmp"))),
         );
         assert!(scanner.signals.pending.lock().unwrap().last_event.is_none());
         scanner

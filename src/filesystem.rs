@@ -124,6 +124,20 @@ pub fn scan(root: &Path, max_bytes: u64) -> Result<LocalTree> {
 
 pub(crate) fn scan_with(
     root: &Path,
+    read_file: impl FnMut(&Path, &str) -> Result<LocalEntry>,
+) -> Result<LocalTree> {
+    scan_excluding(
+        root,
+        &crate::exclusions::Exclusions::new(&[])?,
+        &mut Default::default(),
+        read_file,
+    )
+}
+
+pub(crate) fn scan_excluding(
+    root: &Path,
+    exclusions: &crate::exclusions::Exclusions,
+    omitted: &mut std::collections::HashSet<String>,
     mut read_file: impl FnMut(&Path, &str) -> Result<LocalEntry>,
 ) -> Result<LocalTree> {
     if fs::symlink_metadata(root)?.file_type().is_symlink() {
@@ -134,7 +148,22 @@ pub(crate) fn scan_with(
     for entry in walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| e.depth() == 0 || !ignored(&e.file_name().to_string_lossy()))
+        .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            if ignored(&e.file_name().to_string_lossy()) {
+                return false;
+            }
+            if let Some(relative) = e.path().strip_prefix(root).ok().and_then(Path::to_str) {
+                let relative = relative.replace(std::path::MAIN_SEPARATOR, "/");
+                if exclusions.matches(&relative) {
+                    omitted.insert(relative);
+                    return false;
+                }
+            }
+            true
+        })
     {
         crate::runtime::check()?;
         let entry = entry

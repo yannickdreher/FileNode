@@ -5,7 +5,7 @@ use std::{
     io::{self, Read},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -29,6 +29,8 @@ impl PowerState {
 }
 
 pub struct Policy {
+    upload_schedule: Mutex<Schedule>,
+    download_schedule: Mutex<Schedule>,
     pub cancel: Arc<AtomicBool>,
     pub power: Arc<PowerState>,
     pub pause_on_saver: AtomicBool,
@@ -39,6 +41,16 @@ pub struct Policy {
 impl Policy {
     pub fn new(config: &Config, cancel: Arc<AtomicBool>, power: Arc<PowerState>) -> Arc<Self> {
         let policy = Arc::new(Self {
+            upload_schedule: Mutex::new(Schedule {
+                next: Instant::now(),
+                rate: 0,
+                revision: 0,
+            }),
+            download_schedule: Mutex::new(Schedule {
+                next: Instant::now(),
+                rate: 0,
+                revision: 0,
+            }),
             cancel,
             power,
             pause_on_saver: AtomicBool::new(true),
@@ -102,17 +114,15 @@ pub fn check() -> io::Result<()> {
 pub struct Budget {
     policy: Arc<Policy>,
     upload: bool,
+}
+struct Schedule {
     next: Instant,
-    previous_rate: u64,
+    rate: u64,
+    revision: u64,
 }
 impl Budget {
     pub fn new(policy: Arc<Policy>, upload: bool) -> Self {
-        Self {
-            policy,
-            upload,
-            next: Instant::now(),
-            previous_rate: 0,
-        }
+        Self { policy, upload }
     }
     pub fn reserve(&mut self, bytes: usize) -> io::Result<()> {
         let rate = if self.upload {
@@ -121,26 +131,36 @@ impl Budget {
             &self.policy.download
         };
         let value = rate.load(Ordering::Relaxed);
+        let revision = self.policy.power.revision.load(Ordering::SeqCst);
         self.policy.check()?;
         if value == 0 {
-            self.next = Instant::now();
-            self.previous_rate = 0;
             return Ok(());
         }
-        if value != self.previous_rate {
-            self.next = Instant::now();
-            self.previous_rate = value;
-        }
-        let duration = Duration::from_secs_f64(bytes as f64 / value as f64);
-        self.next = self.next.max(Instant::now()) + duration;
-        while Instant::now() < self.next {
+        let deadline = {
+            let schedule = if self.upload {
+                &self.policy.upload_schedule
+            } else {
+                &self.policy.download_schedule
+            };
+            let mut schedule = schedule.lock().unwrap_or_else(|e| e.into_inner());
+            if schedule.rate != value || schedule.revision != revision {
+                schedule.next = Instant::now();
+                schedule.rate = value;
+                schedule.revision = revision;
+            }
+            schedule.next = schedule.next.max(Instant::now())
+                + Duration::from_secs_f64(bytes as f64 / value as f64);
+            schedule.next
+        };
+        while Instant::now() < deadline {
             self.policy.check()?;
-            if rate.load(Ordering::Relaxed) != value {
-                self.next = Instant::now();
+            if rate.load(Ordering::Relaxed) != value
+                || self.policy.power.revision.load(Ordering::SeqCst) != revision
+            {
                 return self.reserve(bytes);
             }
             std::thread::sleep(
-                self.next
+                deadline
                     .saturating_duration_since(Instant::now())
                     .min(Duration::from_millis(50)),
             );
@@ -180,6 +200,44 @@ impl<R: Read> Read for LimitedReader<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn resume_discards_unused_bandwidth_reservations_from_before_sleep() {
+        let config = Config {
+            upload_limit_kib: 100,
+            ..Default::default()
+        };
+        let power = Arc::new(PowerState::default());
+        let policy = Policy::new(&config, Arc::new(AtomicBool::new(false)), power.clone());
+        let uploading = policy.clone();
+        let worker = std::thread::spawn(move || Budget::new(uploading, true).reserve(1024 * 1024));
+        std::thread::sleep(Duration::from_millis(50));
+        power.set(false, true);
+        assert!(worker.join().unwrap().is_err());
+        power.set(false, false);
+        let start = Instant::now();
+        Budget::new(policy, true).reserve(10 * 1024).unwrap();
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+    #[test]
+    fn concurrent_readers_share_the_account_payload_budget() {
+        let config = Config {
+            upload_limit_kib: 100,
+            ..Default::default()
+        };
+        let policy = Policy::new(
+            &config,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(PowerState::default()),
+        );
+        let start = Instant::now();
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let policy = policy.clone();
+                scope.spawn(move || Budget::new(policy, true).reserve(20 * 1024).unwrap());
+            }
+        });
+        assert!(start.elapsed() >= Duration::from_millis(790));
+    }
     #[test]
     fn budgets_delay_payload_and_power_pause_interrupts_work() {
         let power = Arc::new(PowerState::default());

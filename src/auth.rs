@@ -81,6 +81,25 @@ impl Authentication {
             )),
         }
     }
+    pub(crate) fn authorization(&self) -> Result<Zeroizing<String>> {
+        Ok(Zeroizing::new(match self {
+            Self::Basic { username, password } => {
+                let value = Zeroizing::new(format!("{username}:{}", password.as_str()));
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(value.as_bytes())
+                )
+            }
+            Self::OAuth(session) => format!(
+                "Bearer {}",
+                session
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Token session unavailable"))?
+                    .access_token()?
+                    .as_str()
+            ),
+        }))
+    }
     pub fn observe(&self, status: StatusCode) -> Result<()> {
         if status == StatusCode::UNAUTHORIZED {
             if matches!(self, Self::Basic { .. }) {

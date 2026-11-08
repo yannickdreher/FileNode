@@ -69,6 +69,7 @@ ApplicationWindow {
                                 let active = activity.state === "transferring"
                                 let state = active ? activity.operation === "upload" ? "uploading" : activity.operation === "download" ? "downloading" : "working" : activity.state === "synced" && activity.operation === "trash" ? "trashed" : activity.state
                                 let percent = activity.total > 0 ? Math.min(100, Math.floor(activity.completed * 100 / activity.total)) : 0
+                                if (state === "too_large") return statusWindow.t("activity.too_large").replace("{size}", App.formatBytes(activity.total)).replace("{limit}", App.formatBytes(activity.limit))
                                 return statusWindow.t("activity." + state) + (active && activity.total > 0 ? " · " + percent + "%" : "")
                             }
                             wrapMode: Text.Wrap; Layout.fillWidth: true
@@ -102,11 +103,17 @@ ApplicationWindow {
         function showSettings() { show(); raise(); requestActivate(); if (App.trayAvailable) statusWindow.hide() }
         function save(connectAccount) {
             let browser = authMode.currentIndex === 1
-            App.apply({ server: server.text, web_url: web.text, username: username.text,
-                propagate_deletes: deletes.checked, interval_seconds: interval.value,
-                full_scan_seconds: verification.value,
-                auth_mode: browser ? "browser" : "app_password", oauth_issuer:issuer.text,
-                oauth_client_id:clientId.text, oauth_scopes:scopes.text, oauth_redirect_port:port.value }, connectAccount, browser ? "" : password.text, browser && connectAccount)
+            if (connectAccount) {
+                App.apply({ server: server.text, web_url: web.text, username: username.text,
+                    auth_mode: browser ? "browser" : "app_password", oauth_issuer:issuer.text,
+                    oauth_client_id:clientId.text, oauth_scopes:scopes.text, oauth_redirect_port:port.value },
+                    true, browser ? "" : password.text, browser)
+            } else {
+                App.apply({ propagate_deletes: deletes.checked, interval_seconds: interval.value,
+                    exclude_patterns: exclusions.text.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0),
+                    max_file_bytes: maxFile.value * 1048576, parallel_uploads: parallelUploads.value,
+                    full_scan_seconds: verification.value })
+            }
             password.text = ""
         }
         RowLayout {
@@ -148,17 +155,33 @@ ApplicationWindow {
                                         Label { text: modelData.local_folder; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
                                         Label { text: statusWindow.t("settings.folder_target") + ": /" + modelData.remote_path; wrapMode: Text.Wrap; Layout.fillWidth: true }
                                         Label { text: { let states = App.folderStatuses; let running = App.running; let account = App.accountState; let power = App.powerPaused; return App.folderStatus(modelData.local_folder) } wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        Label { visible: folderError.text.length > 0; text: statusWindow.t("error.details"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        TextArea {
+                                            id: folderError
+                                            text: (App.folderStatuses[modelData.local_folder] || {}).details || ""
+                                            visible: text.length > 0; readOnly: true; selectByMouse: true
+                                            textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap
+                                            Layout.fillWidth: true; Layout.preferredWidth: 1
+                                        }
                                         Flow {
                                             Layout.fillWidth: true; spacing: 8
                                             Button { text: statusWindow.t("action.open"); onClicked: App.openPath(modelData.local_folder) }
-                                            Button { text: statusWindow.t("settings.remove_folder"); enabled: !App.running; onClicked: { let next = App.config.sync_folders.slice(); next.splice(index, 1); App.apply({sync_folders: next}) } }
+                                            Button { text: statusWindow.t("settings.remove_folder"); enabled: App.ready && App.accountState !== "checking"; onClicked: { let next = App.config.sync_folders.slice(); next.splice(index, 1); App.apply({sync_folders: next}) } }
                                         }
                                     }
                                 }
                             }
-                            Button { text: statusWindow.t("settings.add_folder"); enabled: !App.running; onClicked: folderDialog.open() }
+                            Button { text: statusWindow.t("settings.add_folder"); enabled: App.ready && App.accountState !== "checking"; onClicked: folderDialog.open() }
                             Label { text: statusWindow.t("settings.stop_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Switch { id: deletes; text: statusWindow.t("settings.deletes"); checked: App.config.propagate_deletes || false; enabled: !App.running; Layout.fillWidth: true }
+                            Switch { id: deletes; text: statusWindow.t("settings.deletes"); checked: App.config.propagate_deletes || false; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
+                            GroupBox { title: statusWindow.t("settings.exclusions"); Layout.fillWidth: true
+                                ColumnLayout { anchors.fill: parent
+                                    Label { text: statusWindow.t("settings.exclusions_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                    ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 180
+                                        TextArea { id: exclusions; text: (App.config.exclude_patterns || []).join("\n"); enabled: App.ready && App.accountState !== "checking"; selectByMouse: true; textFormat: TextEdit.PlainText; wrapMode: TextEdit.NoWrap }
+                                    }
+                                }
+                            }
                             GroupBox { title: statusWindow.t("settings.bandwidth"); Layout.fillWidth: true
                                 ColumnLayout { anchors.fill: parent
                                     RowLayout {
@@ -173,15 +196,20 @@ ApplicationWindow {
                                     }
                                 }
                             }
+                            Label { text: statusWindow.t("settings.max_file_size"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            SpinBox { id: maxFile; from: 0; to: 16777216; value: Math.ceil((App.config.max_file_bytes || 0) / 1048576); enabled: App.ready && App.accountState !== "checking"; editable: true }
+                            Label { text: statusWindow.t("settings.parallel_uploads"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            SpinBox { id: parallelUploads; from: 1; to: 16; value: App.config.parallel_uploads || 2; enabled: App.ready && App.accountState !== "checking"; editable: true }
+                            Label { text: App.limitsSummary; wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Switch { text: statusWindow.t("settings.pause_power"); checked: App.config.pause_on_power_saver !== false; Layout.fillWidth: true; onClicked: App.apply({pause_on_power_saver: checked}) }
                             Label { visible: !App.powerAvailable; text: statusWindow.t("settings.power_unavailable"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             GroupBox { title: statusWindow.t("settings.advanced"); Layout.fillWidth: true
                                 GridLayout { anchors.fill: parent; columns: 3
                                     Label { text: statusWindow.t("settings.interval") }
-                                    SpinBox { id: interval; from: 5; to: 86400; value: App.config.interval_seconds || 30; enabled: !App.running; editable: true }
+                                    SpinBox { id: interval; from: 5; to: 86400; value: App.config.interval_seconds || 30; enabled: App.ready && App.accountState !== "checking"; editable: true }
                                     Label { text: statusWindow.t("settings.seconds") }
                                     Label { text: statusWindow.t("settings.full_scan") }
-                                    SpinBox { id: verification; from: 60; to: 86400; value: App.config.full_scan_seconds || 900; enabled: !App.running; editable: true }
+                                    SpinBox { id: verification; from: 60; to: 86400; value: App.config.full_scan_seconds || 900; enabled: App.ready && App.accountState !== "checking"; editable: true }
                                     Label { text: statusWindow.t("settings.seconds") }
                                 }
                             }
@@ -190,27 +218,27 @@ ApplicationWindow {
                             spacing: 12
                             Label { text: App.accountStatus; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
                             Label { text: statusWindow.t("settings.server") }
-                            TextField { id: server; text: App.config.server || ""; enabled: !App.running; Layout.fillWidth: true }
+                            TextField { id: server; text: App.config.server || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.web") }
-                            TextField { id: web; text: App.config.web_url || ""; enabled: !App.running; Layout.fillWidth: true }
+                            TextField { id: web; text: App.config.web_url || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.username") }
-                            TextField { id: username; text: App.config.username || ""; enabled: !App.running; Layout.fillWidth: true }
+                            TextField { id: username; text: App.config.username || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.authentication") }
-                            ComboBox { id: authMode; objectName: "authModeSelector"; model: [statusWindow.t("settings.auth_password"),statusWindow.t("settings.auth_browser")]; currentIndex: App.config.auth_mode === "browser" ? 1 : 0; enabled: !App.running; Layout.fillWidth: true }
+                            ComboBox { id: authMode; objectName: "authModeSelector"; model: [statusWindow.t("settings.auth_password"),statusWindow.t("settings.auth_browser")]; currentIndex: App.config.auth_mode === "browser" ? 1 : 0; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.password"); visible: authMode.currentIndex === 0 }
-                            TextField { id: password; visible: authMode.currentIndex === 0; echoMode: TextInput.Password; placeholderText: statusWindow.t("settings.password_hint"); enabled: !App.running; Layout.fillWidth: true }
+                            TextField { id: password; visible: authMode.currentIndex === 0; echoMode: TextInput.Password; placeholderText: statusWindow.t("settings.password_hint"); enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.credentials"); visible: authMode.currentIndex === 0; wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.browser_hint"); visible: authMode.currentIndex === 1; wrapMode: Text.Wrap; Layout.fillWidth: true }
                             GroupBox { title: statusWindow.t("settings.oauth_advanced"); visible: authMode.currentIndex === 1; Layout.fillWidth: true
                                 ColumnLayout { anchors.fill: parent
                                     Label { text: statusWindow.t("settings.oauth_issuer") }
-                                    TextField { id: issuer; text: App.config.oauth_issuer || ""; enabled: !App.running; Layout.fillWidth: true }
+                                    TextField { id: issuer; text: App.config.oauth_issuer || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                                     Label { text: statusWindow.t("settings.oauth_client") }
-                                    TextField { id: clientId; text: App.config.oauth_client_id || ""; enabled: !App.running; Layout.fillWidth: true }
+                                    TextField { id: clientId; text: App.config.oauth_client_id || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                                     Label { text: statusWindow.t("settings.oauth_scopes") }
-                                    TextField { id: scopes; text: App.config.oauth_scopes || ""; enabled: !App.running; Layout.fillWidth: true }
+                                    TextField { id: scopes; text: App.config.oauth_scopes || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                                     Label { text: statusWindow.t("settings.oauth_port") }
-                                    SpinBox { id: port; from: 0; to: 65535; value: App.config.oauth_redirect_port || 0; enabled: !App.running; editable: true }
+                                    SpinBox { id: port; from: 0; to: 65535; value: App.config.oauth_redirect_port || 0; enabled: App.ready && App.accountState !== "checking"; editable: true }
                                 }
                             }
                         }
@@ -230,7 +258,7 @@ ApplicationWindow {
                     }
                     RowLayout {
                         Button { text: statusWindow.t("settings.save"); visible: pages.currentIndex !== 1 && pages.currentIndex !== 3; enabled: App.ready; onClicked: settings.save(false) }
-                        Button { objectName: "accountSignInButton"; text: statusWindow.t(App.accountState === "checking" ? "account.checking" : App.authenticated ? "account.signin_again" : "action.signin"); visible: pages.currentIndex === 1 && !(App.authenticated && App.running); enabled: App.ready && !App.running && App.accountState !== "checking"; highlighted: true; onClicked: settings.save(true) }
+                        Button { objectName: "accountSignInButton"; text: statusWindow.t(App.accountState === "checking" ? "account.checking" : App.authenticated ? "account.signin_again" : "action.signin"); visible: pages.currentIndex === 1; enabled: App.ready && App.accountState !== "checking"; highlighted: true; onClicked: settings.save(true) }
                     }
                     Label { visible: App.running; text: statusWindow.t("settings.pause_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                     Label { visible: App.error.length > 0; text: statusWindow.t("error.details") + "\n" + App.error; wrapMode: Text.Wrap; Layout.fillWidth: true; font.family: "monospace" }

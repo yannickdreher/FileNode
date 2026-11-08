@@ -22,6 +22,12 @@ use std::{
 use url::Url;
 
 pub trait Remote {
+    fn uploader(&self) -> Option<Arc<dyn Uploader>> {
+        None
+    }
+    fn upload_limits(&self) -> UploadLimits {
+        UploadLimits::default()
+    }
     fn create_trash(&mut self, parent: Option<&str>, state: &mut String) -> Result<Node>;
     fn account_id(&self) -> &str;
     fn current_state(&self) -> Result<String>;
@@ -46,8 +52,40 @@ pub trait Remote {
         state: &mut String,
     ) -> Result<Node>;
 }
+pub trait Uploader: Send + Sync {
+    fn send_blob(&self, path: &Path, size: u64) -> Result<String>;
+    fn policy(&self) -> Arc<crate::runtime::Policy>;
+}
 
+#[derive(Clone, Copy, Default, serde::Serialize)]
+pub struct UploadLimits {
+    pub max_size_upload: Option<u64>,
+    pub max_concurrent_upload: Option<usize>,
+}
+impl UploadLimits {
+    pub fn effective_size(self, config: &Config) -> u64 {
+        self.max_size_upload
+            .unwrap_or(if config.max_file_bytes == 0 {
+                1024 * 1024 * 1024
+            } else {
+                config.max_file_bytes
+            })
+            .min(config.file_limit())
+    }
+    pub fn effective_parallelism(self, config: &Config) -> usize {
+        config
+            .parallel_uploads
+            .min(self.max_concurrent_upload.unwrap_or(1))
+            .clamp(1, 16)
+    }
+}
+
+#[derive(Clone)]
 pub struct Jmap {
+    push_url: Option<Url>,
+    push: Option<Arc<crate::push::Push>>,
+    limits: UploadLimits,
+    parallel_uploads: usize,
     web_trash_url: Option<String>,
     client: Client,
     origin: Url,
@@ -178,6 +216,22 @@ impl Jmap {
             .context("downloadUrl is missing")?
             .to_owned();
         let this = Self {
+            push_url: crate::push::endpoint(
+                &origin,
+                &session["capabilities"]["urn:ietf:params:jmap:websocket"],
+            ),
+            push: None,
+            parallel_uploads: config.parallel_uploads,
+            limits: UploadLimits {
+                max_size_upload: session["capabilities"]["urn:ietf:params:jmap:core"]
+                    ["maxSizeUpload"]
+                    .as_u64(),
+                max_concurrent_upload: session["capabilities"]["urn:ietf:params:jmap:core"]
+                    ["maxConcurrentUpload"]
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n > 0),
+            },
             web_trash_url: account["accountCapabilities"][FILE_CAPABILITY]["webTrashUrl"]
                 .as_str()
                 .and_then(|value| {
@@ -199,7 +253,7 @@ impl Jmap {
             account_id,
             modern,
             cancel,
-            max_bytes: config.max_file_bytes,
+            max_bytes: config.file_limit(),
             policy,
         };
         this.expand(&this.upload_url, None)?;
@@ -209,6 +263,22 @@ impl Jmap {
 
     pub fn set_policy(&mut self, policy: Arc<crate::runtime::Policy>) {
         self.policy = policy;
+        self.start_push();
+    }
+    pub fn start_push(&mut self) {
+        if self.push.is_none() {
+            if let Some(url) = &self.push_url {
+                self.push = Some(crate::push::Push::start(
+                    url.clone(),
+                    self.authentication.clone(),
+                    self.account_id.clone(),
+                    self.policy.clone(),
+                ));
+            }
+        }
+    }
+    pub fn take_remote_change(&self) -> bool {
+        self.push.as_ref().is_some_and(|push| push.take_change())
     }
 
     fn transfer_timeout(&self, size: u64, upload: bool) -> Duration {
@@ -220,7 +290,19 @@ impl Jmap {
         .load(Ordering::Relaxed);
         Duration::from_secs(
             size.checked_div(rate)
-                .map(|seconds| seconds + 180)
+                .map(|seconds| {
+                    seconds
+                        .saturating_mul(if upload {
+                            self.limits
+                                .max_concurrent_upload
+                                .unwrap_or(1)
+                                .min(self.parallel_uploads)
+                                .clamp(1, 16) as u64
+                        } else {
+                            1
+                        })
+                        .saturating_add(180)
+                })
                 .unwrap_or(120),
         )
     }
@@ -510,28 +592,21 @@ impl Jmap {
     }
 }
 
-impl Remote for Jmap {
-    fn account_id(&self) -> &str {
-        &self.account_id
+impl Uploader for Jmap {
+    fn send_blob(&self, path: &Path, size: u64) -> Result<String> {
+        self.upload_blob(path, size)
     }
-    fn current_state(&self) -> Result<String> {
-        Ok(self.get_nodes(&[])?.state)
+    fn policy(&self) -> Arc<crate::runtime::Policy> {
+        self.policy.clone()
     }
-    fn snapshot(&mut self, previous: Option<&Snapshot>) -> Result<Snapshot> {
-        if let Some(previous) = previous {
-            match self.incremental(previous) {
-                Ok(snapshot) => return Ok(snapshot),
-                Err(e)
-                    if e.to_string().contains("cannotCalculateChanges")
-                        || e.to_string().contains("unknownMethod") => {}
-                Err(e) => return Err(e),
-            }
-        }
-        self.full_snapshot()
-    }
-
-    fn upload(&mut self, path: &Path, size: u64) -> Result<String> {
-        if size > self.max_bytes {
+}
+impl Jmap {
+    fn upload_blob(&self, path: &Path, size: u64) -> Result<String> {
+        if size
+            > self
+                .max_bytes
+                .min(self.limits.max_size_upload.unwrap_or(self.max_bytes))
+        {
             bail!("Upload exceeds the file size limit");
         }
         let file = File::open(path)?;
@@ -558,6 +633,37 @@ impl Remote for Jmap {
             .as_str()
             .context("Upload response has no blobId")?
             .into())
+    }
+}
+
+impl Remote for Jmap {
+    fn uploader(&self) -> Option<Arc<dyn Uploader>> {
+        Some(Arc::new(self.clone()))
+    }
+    fn upload_limits(&self) -> UploadLimits {
+        self.limits
+    }
+    fn account_id(&self) -> &str {
+        &self.account_id
+    }
+    fn current_state(&self) -> Result<String> {
+        Ok(self.get_nodes(&[])?.state)
+    }
+    fn snapshot(&mut self, previous: Option<&Snapshot>) -> Result<Snapshot> {
+        if let Some(previous) = previous {
+            match self.incremental(previous) {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(e)
+                    if e.to_string().contains("cannotCalculateChanges")
+                        || e.to_string().contains("unknownMethod") => {}
+                Err(e) => return Err(e),
+            }
+        }
+        self.full_snapshot()
+    }
+
+    fn upload(&mut self, path: &Path, size: u64) -> Result<String> {
+        self.upload_blob(path, size)
     }
 
     fn download(&mut self, node: &Node, path: &Path) -> Result<()> {
@@ -956,6 +1062,75 @@ mod tests {
                 "supportedNodeTypes": if modern { vec!["File", "Directory"] } else { vec!["file", "directory"] }
             }}}}, "primaryAccounts":{FILE_CAPABILITY:"account"},
             "apiUrl":"/jmap", "uploadUrl":"/upload/{accountId}/", "downloadUrl":"/download/{accountId}/{blobId}/{name}?type={type}"})
+    }
+
+    #[test]
+    fn advertised_upload_limits_are_discovered_and_enforced_before_sending() {
+        let (address, worker) = server(1, |_, _| {
+            let mut value = session(true);
+            value["capabilities"]["urn:ietf:params:jmap:core"] =
+                json!({"maxSizeUpload":4,"maxConcurrentUpload":3});
+            response("200 OK", "", &value.to_string())
+        });
+        let config = Config {
+            server: address,
+            username: "user".into(),
+            parallel_uploads: 8,
+            ..Default::default()
+        };
+        let mut remote = Jmap::connect_inner(
+            &config,
+            "test".into(),
+            Arc::new(AtomicBool::new(false)),
+            true,
+        )
+        .unwrap();
+        assert_eq!(remote.upload_limits().effective_size(&config), 4);
+        assert_eq!(remote.upload_limits().effective_parallelism(&config), 3);
+        // The path need not exist: rejection happens before opening or posting it.
+        assert!(remote.upload(Path::new("unused"), 5).is_err());
+        let mut lowered = config.clone();
+        lowered.max_file_bytes = 2;
+        lowered.parallel_uploads = 1;
+        assert_eq!(remote.upload_limits().effective_size(&lowered), 2);
+        assert_eq!(remote.upload_limits().effective_parallelism(&lowered), 1);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn disconnected_upload_retries_the_complete_snapshot_without_publishing_partial_content() {
+        let (address, worker) = server(3, |index, request| {
+            if index == 0 {
+                return response("200 OK", "", &session(false).to_string());
+            }
+            assert_eq!(request.body, b"complete snapshot");
+            if index == 1 {
+                return String::new();
+            } // Network drops before acknowledgment.
+            response(
+                "200 OK",
+                "",
+                &json!({"accountId":"account","blobId":"complete","size":17}).to_string(),
+            )
+        });
+        let config = Config {
+            server: address,
+            username: "user".into(),
+            ..Default::default()
+        };
+        let mut remote = Jmap::connect_inner(
+            &config,
+            "test".into(),
+            Arc::new(AtomicBool::new(false)),
+            true,
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("snapshot");
+        std::fs::write(&file, b"complete snapshot").unwrap();
+        assert!(remote.upload(&file, 17).is_err());
+        assert_eq!(remote.upload(&file, 17).unwrap(), "complete");
+        worker.join().unwrap();
     }
 
     #[test]

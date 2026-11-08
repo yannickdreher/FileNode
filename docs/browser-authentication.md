@@ -4,7 +4,7 @@ FileNode supports OAuth 2 Authorization Code with PKCE S256 through the operatin
 
 ## User workflow
 
-1. Pause synchronization before changing the account. Enter the JMAP server and username in account settings.
+1. Enter the JMAP server and username in account settings. Sign in saves and applies these account changes, safely stopping the previous sync worker first when necessary.
 2. Select **Browser / single sign-on** as the sign-in method. Keep the default issuer/client settings for a compatible Stalwart server, or enter the administrator-provided issuer, public client ID, scopes and callback port.
 3. Choose **Sign in / Anmelden**. FileNode saves the current form values first, then opens the provider's page in the browser, where its password, MFA and consent rules apply. FileNode never receives the user's login password.
 4. The browser returns to a temporary `http://127.0.0.1:<port>/oauth/callback` listener. The listener exists only for that sign-in and closes after success, cancellation or timeout. Return to FileNode after the confirmation page.

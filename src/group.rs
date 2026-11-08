@@ -24,6 +24,7 @@ struct FolderState {
     failed: bool,
     deferred: usize,
     blocked: usize,
+    limited: usize,
 }
 
 pub struct SyncGroup {
@@ -49,6 +50,7 @@ impl SyncGroup {
                     failed: false,
                     deferred: 0,
                     blocked: 0,
+                    limited: 0,
                 })
                 .collect(),
         })
@@ -68,6 +70,13 @@ impl SyncGroup {
             Instant::now() >= folder.due
                 || (!folder.failed && folder.scanner.as_ref().is_some_and(LocalScanner::ready))
         })
+    }
+    pub fn refresh_remote(&mut self) {
+        for folder in &mut self.folders {
+            if !folder.failed {
+                folder.due = Instant::now();
+            }
+        }
     }
 
     pub fn poll<R: Remote>(
@@ -117,10 +126,20 @@ impl SyncGroup {
             })();
             match result {
                 Ok(report) => {
+                    if folder.failed {
+                        crate::logger::event(
+                            crate::logger::Level::Information,
+                            210,
+                            "folder_recovered",
+                            Some(&folder.config.local_folder.to_string_lossy()),
+                            "Folder synchronization succeeded after a failure",
+                        );
+                    }
                     folder.failed = false;
                     folder.backoff = 5;
                     folder.deferred = report.deferred;
                     folder.blocked = report.blocked;
+                    folder.limited = report.limited;
                     crate::activity::folder_status(
                         if report.blocked > 0 {
                             "blocked"
@@ -128,6 +147,8 @@ impl SyncGroup {
                             "waiting"
                         } else if report.needs_rescan {
                             "checking"
+                        } else if report.limited > 0 {
+                            "limited"
                         } else {
                             "current"
                         },
@@ -157,6 +178,13 @@ impl SyncGroup {
                         return Err(error);
                     }
                     folder.failed = true;
+                    crate::logger::event(
+                        crate::logger::Level::Error,
+                        300,
+                        "folder_retry",
+                        Some(&folder.config.local_folder.to_string_lossy()),
+                        &format!("Retry in {} seconds: {error:#}", folder.backoff),
+                    );
                     crate::activity::folder_status(
                         "retrying",
                         folder.backoff,
@@ -176,6 +204,7 @@ impl SyncGroup {
         total.failed_folders = self.folders.iter().filter(|folder| folder.failed).count();
         total.deferred = self.folders.iter().map(|folder| folder.deferred).sum();
         total.blocked = self.folders.iter().map(|folder| folder.blocked).sum();
+        total.limited = self.folders.iter().map(|folder| folder.limited).sum();
         Ok(total)
     }
 }

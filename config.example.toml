@@ -24,11 +24,16 @@ autostart = false
 propagate_deletes = true
 max_delete_count = 20
 max_delete_percent = 25
-max_file_bytes = 1073741824
+# Zero: server-advertised upload limit (1 GiB fallback if not advertised).
+# Positive values add a user cap in bytes and also bound downloads.
+max_file_bytes = 0
+# Clamped to the server's maxConcurrentUpload; unknown server limit means one.
+parallel_uploads = 2
+# Optional, editable in the UI. An empty list disables these exclusions.
+exclude_patterns = ["~$*", "*.tmp", "*.temp", "*.swp", "*.swo", "*~", "*.crdownload", "*.part", "*.partial", "*.download", "desktop.ini", "Thumbs.db", ".DS_Store"]
 device_name = "Desktop"
 
-# Paths inside your home keep their relative hierarchy on the server.
-# Other locations use the selected folder's own name. Overlapping roots are rejected.
+# Each selection uses its own final folder name at the server root. Overlapping roots are rejected.
 [[sync_folders]]
 local_folder = "/home/user/Desktop" # Windows: 'C:\Users\user\Desktop'
 
