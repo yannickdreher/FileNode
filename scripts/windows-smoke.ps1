@@ -22,3 +22,8 @@ if ($driveProcess.ExitCode -ne 0 -or !$driveReport.passed) {
     throw "Windows UI smoke test failed (exit $($driveProcess.ExitCode)): $($driveReport.message)"
 }
 Write-Output 'Windows UI smoke passed: English/German, verified account vs sync pause, independent folder states, one row per file with progress, multiple folders, stop without deletion, offline, clean quit.'
+if ($driveReport.nativePopupFrame -and $driveReport.repeatedTrayActivation) {
+    Write-Output 'Native tray checks passed: no classic frame, dark/light themes, repeated reopen, stale deactivation, no taskbar entry.'
+} else {
+    Write-Output 'Native tray checks skipped: no notification-area host was available.'
+}

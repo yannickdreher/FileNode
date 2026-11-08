@@ -49,10 +49,17 @@ internal sealed class DesktopHost
             args.Cancel = true;
             if (tray.Available) status.AppWindow.Hide(); else _ = Quit();
         };
-        if (tray.Available && status.AppWindow.Presenter is OverlappedPresenter popup) {
-            popup.SetBorderAndTitleBar(false, false); popup.IsResizable = false; popup.IsMaximizable = false; popup.IsMinimizable = false;
-        }
-        status.Activated += (_, args) => { if (args.WindowActivationState == WindowActivationState.Deactivated && tray.Available && App.SelfTestDirectory is null) status.AppWindow.Hide(); };
+        if (tray.Available) WindowChrome.ConfigurePopup(status);
+        status.Activated += (_, args) =>
+        {
+            if (args.WindowActivationState != WindowActivationState.Deactivated || !tray.Available) return;
+            // Activation can change again while a tray click is being dispatched.
+            // Hide only after queued activation has settled, using the current HWND.
+            status.DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (!quitting && status.AppWindow.IsVisible && !WindowChrome.OwnsForeground(status)) status.AppWindow.Hide();
+            });
+        };
         core.Changed += Update;
         BuildStatus();
     }
@@ -147,11 +154,12 @@ internal sealed class DesktopHost
     }
     public void ShowStatus()
     {
-        if (status.AppWindow.Presenter is OverlappedPresenter presenter)
-        { presenter.IsMaximizable = false; presenter.IsResizable = false; if (tray.Available) presenter.SetBorderAndTitleBar(false, false); }
+        if (tray.Available) WindowChrome.ConfigurePopup(status);
+        else if (status.AppWindow.Presenter is OverlappedPresenter presenter)
+        { presenter.IsMaximizable = false; presenter.IsResizable = false; }
         var area = DisplayArea.GetFromWindowId(status.AppWindow.Id, DisplayAreaFallback.Primary).WorkArea;
         status.AppWindow.Move(new PointInt32(area.X + area.Width - status.AppWindow.Size.Width - 12, area.Y + area.Height - status.AppWindow.Size.Height - 12));
-        status.Activate(); status.AppWindow.Show();
+        WindowChrome.Show(status);
     }
     private void Act(string action)
     {
@@ -182,7 +190,7 @@ internal sealed class DesktopHost
             settings.AppWindow.Closing += (_, args) => { args.Cancel = true; settings.AppWindow.Hide(); if (!tray.Available) ShowStatus(); };
             BuildSettings();
         }
-        settings.Activate(); settings.AppWindow.Show();
+        WindowChrome.Show(settings);
     }
     private void BuildSettings()
     {
@@ -405,6 +413,35 @@ internal sealed class DesktopHost
         if (!core.Ready || core.Error != "") throw new InvalidOperationException("UI smoke test worker did not become ready: " + core.Error);
         App.SelfTestProgress("open status and settings");
         ShowStatus(); ShowSettings();
+        if (tray.Available)
+        {
+            App.SelfTestProgress("native popup frame and repeated tray activation");
+            async Task WaitForPopup(Func<bool> ready, string message)
+            {
+                var limit = DateTime.UtcNow.AddSeconds(2);
+                while (!ready() && DateTime.UtcNow < limit) await Task.Delay(25);
+                if (!ready()) throw new InvalidOperationException(message + $" (visible={status.AppWindow.IsVisible}, statusForeground={WindowChrome.OwnsForeground(status)}, settingsForeground={WindowChrome.OwnsForeground(settings!)})");
+            }
+            var content = (FrameworkElement)status.Content;
+            var previousTheme = content.RequestedTheme;
+            foreach (var theme in new[] { ElementTheme.Dark, ElementTheme.Light })
+            {
+                content.RequestedTheme = theme;
+                for (var repeat = 0; repeat < 3; repeat++)
+                {
+                    ShowSettings();
+                    await WaitForPopup(() => WindowChrome.OwnsForeground(settings!) && !status.AppWindow.IsVisible, "Tray popup did not dismiss after losing focus");
+                    Dispatch(() => Act("show"));
+                    await WaitForPopup(() => status.AppWindow.IsVisible && WindowChrome.OwnsForeground(status), "Tray popup did not reopen in the foreground");
+                    WindowChrome.VerifyPopupFrame(status);
+                    // A pending deactivation must not hide the newly reopened panel.
+                    ShowSettings(); Act("show"); await Task.Delay(100);
+                    await WaitForPopup(() => status.AppWindow.IsVisible && WindowChrome.OwnsForeground(status), "Stale deactivation hid the reopened tray popup");
+                    WindowChrome.VerifyPopupFrame(status);
+                }
+            }
+            content.RequestedTheme = previousTheme;
+        }
         async Task WaitForFolders(int count)
         {
             var limit = DateTime.UtcNow.AddSeconds(5);
@@ -482,7 +519,8 @@ internal sealed class DesktopHost
         await WaitForFolders(1);
         if (!File.Exists(Path.Combine(first, "keep.txt")) || !Directory.Exists(second)) throw new InvalidOperationException("Stopping sync removed a selected folder");
         if (core.Running) throw new InvalidOperationException("Offline UI smoke test unexpectedly started synchronization");
-        File.WriteAllText(Path.Combine(directory, "ui-smoke.json"), "{\"passed\":true,\"pages\":4,\"languages\":2,\"folders\":2,\"stopPreservesFiles\":true,\"independentStates\":true,\"uniqueFileRows\":true}");
+        File.WriteAllText(Path.Combine(directory, "ui-smoke.json"), System.Text.Json.JsonSerializer.Serialize(new
+        { passed = true, pages = 4, languages = 2, folders = 2, stopPreservesFiles = true, independentStates = true, uniqueFileRows = true, nativePopupFrame = tray.Available, repeatedTrayActivation = tray.Available }));
         App.SelfTestProgress("quit");
         await Quit();
     }

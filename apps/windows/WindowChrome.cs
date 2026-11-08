@@ -10,12 +10,79 @@ namespace FileNode.Windows;
 
 internal static class WindowChrome
 {
+    private const int WindowStyle = -16;
+    private const long DialogFrame = 0x00400000;
+
     [DllImport("dwmapi.dll")]
     private static extern int DwmSetWindowAttribute(nint window, uint attribute, ref uint value, uint size);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")]
+    private static extern nint GetWindowLongPtr(nint window, int index);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW", SetLastError = true)]
+    private static extern nint SetWindowLongPtr(nint window, int index, nint value);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SetWindowPos(nint window, nint after, int x, int y, int width, int height, uint flags);
+    [DllImport("user32.dll")]
+    private static extern nint GetForegroundWindow();
+    [DllImport("user32.dll")]
+    private static extern nint GetAncestor(nint window, uint flags);
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(nint window);
+
+    public static void ConfigurePopup(Window window)
+    {
+        if (window.AppWindow.Presenter is not OverlappedPresenter presenter) return;
+        presenter.IsResizable = false;
+        presenter.IsMaximizable = false;
+        presenter.IsMinimizable = false;
+        presenter.SetBorderAndTitleBar(false, false);
+        window.AppWindow.IsShownInSwitchers = false;
+        RemoveDialogFrame(WinRT.Interop.WindowNative.GetWindowHandle(window));
+    }
+
+    private static void RemoveDialogFrame(nint handle)
+    {
+        // The WinUI non-resizable presenter can leave WS_DLGFRAME behind even
+        // with HasBorder=false. This classic frame is separate from the DWM border.
+        var style = GetWindowLongPtr(handle, WindowStyle).ToInt64();
+        if ((style & DialogFrame) == 0) return;
+        Marshal.SetLastPInvokeError(0);
+        if (SetWindowLongPtr(handle, WindowStyle, (nint)(style & ~DialogFrame)) == 0 && Marshal.GetLastPInvokeError() != 0)
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError());
+        // Recalculate the non-client area without moving, resizing or activating.
+        if (!SetWindowPos(handle, 0, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020))
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError());
+    }
+
+    public static bool OwnsForeground(Window window)
+    {
+        var handle = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        var foreground = GetForegroundWindow();
+        return foreground == handle || (foreground != 0 && GetAncestor(foreground, 3) == handle);
+    }
+
+    public static void Show(Window window)
+    {
+        if (window.AppWindow.Presenter is OverlappedPresenter presenter && presenter.State == OverlappedPresenterState.Minimized)
+            presenter.Restore();
+        // Activate only after revealing a previously hidden HWND.
+        window.AppWindow.Show(true);
+        window.Activate();
+        _ = SetForegroundWindow(WinRT.Interop.WindowNative.GetWindowHandle(window));
+    }
+
+    internal static void VerifyPopupFrame(Window window)
+    {
+        var style = GetWindowLongPtr(WinRT.Interop.WindowNative.GetWindowHandle(window), WindowStyle).ToInt64();
+        if ((style & (DialogFrame | 0x00800000 | 0x00040000)) != 0)
+            throw new InvalidOperationException($"Tray popup retained a native frame: 0x{style:X8}");
+        if (window.AppWindow.IsShownInSwitchers)
+            throw new InvalidOperationException("Tray popup appeared in the taskbar/window switcher");
+    }
 
     public static void ThemeBorder(Window window, bool dark, bool popup = false)
     {
         var handle = WinRT.Interop.WindowNative.GetWindowHandle(window);
+        if (popup) RemoveDialogFrame(handle);
         uint immersiveDark = dark ? 1u : 0u;
         _ = DwmSetWindowAttribute(handle, 20, ref immersiveDark, sizeof(uint));
         // A tray panel draws its own rounded outline; suppress the extra DWM border.
