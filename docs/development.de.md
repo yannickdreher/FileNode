@@ -2,7 +2,7 @@
 
 [English](development.md)
 
-In VS Code direkt den NoriDrive-Repository-Ordner öffnen. Oberflächen und Rust-Kern besitzen getrennte Startprofile. `scripts/prepare-debug.*` erstellt ein ignoriertes `.dev/profile.toml` mit leerem Benutzernamen, ausgeschaltetem Autostart und deaktivierter Löschweitergabe.
+In VS Code direkt den FileNode-Repository-Ordner öffnen. Oberflächen und Rust-Kern besitzen getrennte Startprofile. `scripts/prepare-debug.*` erstellt ein ignoriertes `.dev/profile.toml` mit leerem Benutzernamen, ausgeschaltetem Autostart und deaktivierter Löschweitergabe.
 
 ## Erweiterungen
 
@@ -30,19 +30,19 @@ dotnet --version
 powershell.exe -NoProfile -File scripts/build-windows.ps1
 ```
 
-**NoriDrive: Windows existing build (no Cargo required)** startet mit F5 den bereits vorhandenen Windows-x64-Testbuild aus `.dev/noridrive-preview/noridrive-ui.exe`. Er enthält den passenden Rust-Worker; Cargo und C++-Buildtools werden dafür nicht benötigt. Das Profil öffnet die Einstellungen mit `.dev/profile.toml`. Es baut keine Quellcodeänderungen und funktioniert erst, wenn dieser lokale Build samt Begleitdateien vorhanden ist; Binärdateien sind nicht im Repository enthalten. Eine noch laufende ältere Instanz mit demselben Profil zuerst über ihr Tray-Menü beenden. Ein Release-Build bietet eingeschränkte Debugging-Möglichkeiten; Rust-Breakpoints benötigen weiterhin einen passenden nativen Debug-Build. Der getrennte Ausgabeordner verhindert, dass eine laufende normale Build-Instanz die Vorschau-Aktualisierung blockiert.
+**FileNode: Windows existing build (no Cargo required)** startet mit F5 den bereits vorhandenen Windows-x64-Testbuild aus `.dev/filenode-preview/filenode-ui.exe`. Er enthält den passenden Rust-Worker; Cargo und C++-Buildtools werden dafür nicht benötigt. Das Profil öffnet die Einstellungen mit `.dev/profile.toml`. Es baut keine Quellcodeänderungen und funktioniert erst, wenn dieser lokale Build samt Begleitdateien vorhanden ist; Binärdateien sind nicht im Repository enthalten. Eine noch laufende ältere Instanz mit demselben Profil zuerst über ihr Tray-Menü beenden. Ein Release-Build bietet eingeschränkte Debugging-Möglichkeiten; Rust-Breakpoints benötigen weiterhin einen passenden nativen Debug-Build. Der getrennte Ausgabeordner verhindert, dass eine laufende normale Build-Instanz die Vorschau-Aktualisierung blockiert.
 
 Eine neue Vorschau mit einem bereits gebauten Windows-x64-Kern lässt sich so erzeugen:
 
 ```powershell
-powershell.exe -NoProfile -File scripts/build-windows.ps1 -Configuration Release -RustCorePath C:/path/to/noridrive.exe -OutputDirectory .dev/noridrive-preview
+powershell.exe -NoProfile -File scripts/build-windows.ps1 -Configuration Release -RustCorePath C:/path/to/filenode.exe -OutputDirectory .dev/filenode-preview
 ```
 
 Das Skript normalisiert den abschließenden Verzeichnistrenner im WinUI-Ausgabepfad. Ohne diesen Trenner kann `App.xbf` unter einem falschen Ressourcennamen eingebettet werden; der Build bricht deshalb bei einem solchen direkten `OutputPath` ab.
 
 Mit `powershell.exe -NoProfile -File scripts/windows-smoke.ps1` lässt sich die vorhandene Vorschau nativ prüfen: Start, alle vier Einstellungsseiten, Deutsch/Englisch und Beenden. Dafür wird ein eigenes Profil mit leerem Benutzernamen angelegt; kein Konto wird verbunden. Das Ergebnis liegt unter `artifacts/windows-smoke/ui-smoke.json`. Der Test benötigt eine angemeldete Windows-Desktopsitzung.
 
-**NoriDrive: Windows WinUI (Microsoft C# debugger)** baut Rust und WinUI und öffnet mit F5 die Einstellungen im eigenen Debug-Profil. C#-Breakpoints betreffen die Oberfläche. Der Rust-Worker läuft als Kindprozess. Für Rust-Breakpoints **NoriDrive: Rust core Windows (Microsoft debugger)** mit einem eigenen Testkonto in `.dev/profile.toml` verwenden oder den nativen Microsoft-Debugger an den Worker anhängen. Dafür den MSVC-Build mit PDB verwenden, nicht die GNU-Cross-Build-Debugsymbole.
+**FileNode: Windows WinUI (Microsoft C# debugger)** baut Rust und WinUI und öffnet mit F5 die Einstellungen im eigenen Debug-Profil. C#-Breakpoints betreffen die Oberfläche. Der Rust-Worker läuft als Kindprozess. Für Rust-Breakpoints **FileNode: Rust core Windows (Microsoft debugger)** mit einem eigenen Testkonto in `.dev/profile.toml` verwenden oder den nativen Microsoft-Debugger an den Worker anhängen. Dafür den MSVC-Build mit PDB verwenden, nicht die GNU-Cross-Build-Debugsymbole.
 
 Wer nur die Oberfläche entwickelt, kann `scripts/build-windows.ps1 -RustCorePath <vorhandene.exe>` verwenden. Eine lokale Entwicklungskopie unter `.tools/windows-core` ist ignoriert und gehört nicht ins Repository. Ein erfolgreicher WinUI-Build über NuGet bedeutet nicht, dass fehlende native Rust-/C++-Voraussetzungen auf dem Rechner installiert wurden.
 
@@ -62,7 +62,7 @@ sh scripts/build-linux.sh
 
 Für gespeicherte Passwörter einen entsperrten Secret Service verwenden, etwa GNOME Keyring oder passend eingerichtetes KDE Wallet. KDE-Stil-/Integrationspakete sind optional. Für das Tray braucht die Desktop-Sitzung einen StatusNotifier-Host; unter GNOME gegebenenfalls eine Erweiterung installieren.
 
-**NoriDrive: Linux Qt (GDB)** startet die Oberfläche zum Debuggen ohne Tray. **NoriDrive: Rust core Linux (GDB)** startet den Headless-Kern mit einem Testprofil. Diese Profile nutzen das normale Cargo-Zielverzeichnis; bei geändertem `CARGO_TARGET_DIR` die Pfade entsprechend anpassen.
+**FileNode: Linux Qt (GDB)** startet die Oberfläche zum Debuggen ohne Tray. **FileNode: Rust core Linux (GDB)** startet den Headless-Kern mit einem Testprofil. Diese Profile nutzen das normale Cargo-Zielverzeichnis; bei geändertem `CARGO_TARGET_DIR` die Pfade entsprechend anpassen.
 
 ## Tests ohne Konto
 

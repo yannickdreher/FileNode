@@ -1,6 +1,6 @@
-# NoriDrive visual identity
+# FileNode visual identity
 
-The folded **N** represents two copies connected by one continuous ribbon. Forest green keeps the mark calm, and the mint fold distinguishes the transfer between them. No third-party logos, stock images or external fonts are embedded.
+The folded **F** represents a file. Its separate mint dot is the node. Forest green keeps the mark calm, and the mint corner highlights the folded sheet. No third-party logos, stock images or external fonts are embedded.
 
 - `icon.svg`: scalable application tile, also used as the website favicon.
 - `logo.svg` / `logo-white.svg`: horizontal wordmarks for light / dark surfaces. The text uses local system font fallbacks and remains editable.

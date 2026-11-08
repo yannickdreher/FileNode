@@ -12,7 +12,7 @@ oauth_client_id = "" # Empty: public dynamic registration, if supported.
 oauth_scopes = "urn:ietf:params:oauth:scope:files offline_access"
 oauth_redirect_port = 0 # Ephemeral; use a fixed registered port for providers such as authentik.
 # account_id = "your-file-account-id" # Only needed when discovery is ambiguous.
-local_folder = "/home/user/NoriDrive" # Windows: 'C:\Users\user\NoriDrive'
+local_folder = "/home/user/FileNode" # Windows: 'C:\Users\user\FileNode'
 # The remote top-level folder automatically uses the local folder's name.
 interval_seconds = 30
 full_scan_seconds = 900

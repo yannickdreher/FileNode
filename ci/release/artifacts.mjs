@@ -9,7 +9,7 @@ export function parseVersion(version) {
 }
 export function filenames(version, platform) {
   parseVersion(version);
-  const prefix = `noridrive-${version}`;
+  const prefix = `filenode-${version}`;
   if (platform === "linux") return [`${prefix}-linux-x86_64.tar.gz`];
   if (platform === "windows") return [`${prefix}-windows-x86_64.zip`, `${prefix}-windows-x86_64.msix`, `${prefix}-windows-x86_64-cli.exe`];
   throw new Error("Unsupported release platform");

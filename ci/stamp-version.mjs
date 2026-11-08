@@ -8,7 +8,7 @@ async function replace(filename, pattern, replacement) {
   await writeFile(filename, text.replace(pattern, replacement));
 }
 await replace("Cargo.toml", /^(version\s*=\s*)"[^"]+"/m, `$1"${version}"`);
-await replace("Cargo.lock", /(\[\[package\]\]\r?\nname = "noridrive"\r?\nversion = )"[^"]+"/, `$1"${version}"`);
-await replace("apps/linux/CMakeLists.txt", /(project\(NoriDriveLinux VERSION )\S+/, `$1${version}`);
-await replace("apps/windows/NoriDrive.Windows.csproj", /<Version>[^<]+<\/Version>/, `<Version>${version}</Version>`);
+await replace("Cargo.lock", /(\[\[package\]\]\r?\nname = "filenode"\r?\nversion = )"[^"]+"/, `$1"${version}"`);
+await replace("apps/linux/CMakeLists.txt", /(project\(FileNodeLinux VERSION )\S+/, `$1${version}`);
+await replace("apps/windows/FileNode.Windows.csproj", /<Version>[^<]+<\/Version>/, `<Version>${version}</Version>`);
 await replace("apps/windows/Package.appxmanifest", /(<Identity\b[^>]*\bVersion=")[^"]+"/, `$1${version}.0"`);

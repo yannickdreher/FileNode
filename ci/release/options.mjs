@@ -27,5 +27,5 @@ export const analysisPlugins = [analyzer, "./ci/release/notes.mjs"];
 export const options = {
   branches: ["main"],
   tagFormat: "v${version}",
-  repositoryUrl: "https://github.com/yannickdreher/NoriDrive.git",
+  repositoryUrl: "https://github.com/yannickdreher/FileNode.git",
 };

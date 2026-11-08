@@ -3,8 +3,8 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
-    <RootNamespace>Noritec.NoriDrive.Windows</RootNamespace>
-    <AssemblyName>noridrive-ui</AssemblyName>
+    <RootNamespace>FileNode.Windows</RootNamespace>
+    <AssemblyName>filenode-ui</AssemblyName>
     <Version>0.1.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>x64;ARM64</Platforms>
@@ -22,23 +22,23 @@
     <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
     <AppxBundle>Never</AppxBundle>
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
-    <ApplicationIcon>Assets\drive.ico</ApplicationIcon>
-    <RustCorePath Condition="'$(RustCorePath)' == ''">$(MSBuildThisFileDirectory)..\..\target\debug\noridrive.exe</RustCorePath>
+    <ApplicationIcon>Assets\filenode.ico</ApplicationIcon>
+    <RustCorePath Condition="'$(RustCorePath)' == ''">$(MSBuildThisFileDirectory)..\..\target\debug\filenode.exe</RustCorePath>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.6.5" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.9457" />
     <Content Include="Assets\**\*" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\locales\*.json" Link="locales\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="$(RustCorePath)" Link="noridrive-core.exe" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(RustCorePath)')" />
+    <Content Include="$(RustCorePath)" Link="filenode-core.exe" CopyToOutputDirectory="PreserveNewest" Condition="Exists('$(RustCorePath)')" />
   </ItemGroup>
   <Target Name="ValidateXamlOutputPath" BeforeTargets="Prep_ComputeProcessXamlFiles">
     <!-- WinUI concatenates OutputPath and App.xbf without inserting a separator.
          dotnet build -o may supply a path without the trailing separator. -->
     <PropertyGroup>
-      <_NoriDriveXamlOutputPath>$([MSBuild]::EnsureTrailingSlash('$(OutputPath)'))</_NoriDriveXamlOutputPath>
+      <_FileNodeXamlOutputPath>$([MSBuild]::EnsureTrailingSlash('$(OutputPath)'))</_FileNodeXamlOutputPath>
     </PropertyGroup>
-    <Error Condition="'$(OutputPath)' != '$(_NoriDriveXamlOutputPath)'" Text="WinUI OutputPath must end with a directory separator to package App.xbf correctly. Use scripts/build-windows.ps1 -OutputDirectory or supply a trailing slash." />
+    <Error Condition="'$(OutputPath)' != '$(_FileNodeXamlOutputPath)'" Text="WinUI OutputPath must end with a directory separator to package App.xbf correctly. Use scripts/build-windows.ps1 -OutputDirectory or supply a trailing slash." />
   </Target>
   <Target Name="RequireCoreForPackage" BeforeTargets="Build" Condition="'$(PackageForStore)' == 'true' And !Exists('$(RustCorePath)')">
     <Error Text="Build the matching Rust core first and set RustCorePath. A Store package must contain the sync executable." />

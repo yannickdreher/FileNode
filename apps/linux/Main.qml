@@ -6,7 +6,7 @@ import QtQuick.Dialogs
 ApplicationWindow {
     id: statusWindow
     objectName: "statusWindow"
-    title: "NoriDrive"
+    title: "FileNode"
     width: 420; height: 620
     visible: true
     flags: App.trayAvailable ? Qt.Tool | Qt.FramelessWindowHint : Qt.Window
@@ -21,8 +21,8 @@ ApplicationWindow {
         ColumnLayout {
             anchors.fill: parent; anchors.margins: 12
             RowLayout {
-                Image { source: "qrc:/drive.svg"; sourceSize.width: 26; sourceSize.height: 26 }
-                Label { text: "NoriDrive"; font.bold: true; Layout.fillWidth: true }
+                Image { source: "qrc:/filenode.svg"; sourceSize.width: 26; sourceSize.height: 26 }
+                Label { text: "FileNode"; font.bold: true; Layout.fillWidth: true }
                 ToolButton { text: "☰"; Accessible.name: statusWindow.t("tray.menu"); onClicked: statusMenu.open() }
                 ToolButton { text: "×"; Accessible.name: statusWindow.t("tray.hide"); onClicked: App.trayAvailable ? statusWindow.hide() : App.quit() }
             }
@@ -73,7 +73,7 @@ ApplicationWindow {
     ApplicationWindow {
         id: settings
         objectName: "settingsWindow"
-        title: "NoriDrive — " + statusWindow.t("tray.settings")
+        title: "FileNode — " + statusWindow.t("tray.settings")
         width: 980; height: 760; minimumWidth: 800; minimumHeight: 640
         visible: startSettings
         onClosing: function(close) { close.accepted = false; hide(); if (!App.trayAvailable) statusWindow.showPanel() }
@@ -92,8 +92,8 @@ ApplicationWindow {
             anchors.fill: parent; anchors.margins: 20; spacing: 24
             ColumnLayout {
                 Layout.minimumWidth: 185; Layout.preferredWidth: 185; Layout.maximumWidth: 185; Layout.fillHeight: true
-                Image { source: "qrc:/drive.svg"; sourceSize.width: 42; sourceSize.height: 42 }
-                Label { text: "NoriDrive"; font.pointSize: 18; font.bold: true }
+                Image { source: "qrc:/filenode.svg"; sourceSize.width: 42; sourceSize.height: 42 }
+                Label { text: "FileNode"; font.pointSize: 18; font.bold: true }
                 Repeater {
                     model: ["settings.sync", "settings.account", "settings.general", "settings.about"]
                     ItemDelegate { text: statusWindow.t(modelData); Layout.fillWidth: true; highlighted: pages.currentIndex === index; onClicked: pages.currentIndex = index }
@@ -186,7 +186,7 @@ ApplicationWindow {
                             Label { text: statusWindow.t("about.description"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { text: statusWindow.t("about.limits"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { text: "Qt Quick Controls · " + App.style }
-                            Button { text: statusWindow.t("about.project"); onClicked: Qt.openUrlExternally("https://github.com/yannickdreher/NoriDrive") }
+                            Button { text: statusWindow.t("about.project"); onClicked: Qt.openUrlExternally("https://github.com/yannickdreher/FileNode") }
                         }
                     }
                     RowLayout {

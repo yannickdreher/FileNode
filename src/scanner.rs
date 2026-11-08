@@ -365,8 +365,7 @@ mod tests {
         scanner.scan(100).unwrap();
         scanner.signals.event(
             root.path(),
-            Ok(Event::new(EventKind::Any)
-                .add_path(root.path().join(".noritec-drive/state.sqlite"))),
+            Ok(Event::new(EventKind::Any).add_path(root.path().join(".filenode/state.sqlite"))),
         );
         assert!(scanner.signals.pending.lock().unwrap().last_event.is_none());
         scanner

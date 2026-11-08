@@ -10,7 +10,7 @@ from gi.repository import GLib
 
 DBusGMainLoop(set_as_default=True)
 bus = dbus.SessionBus()
-endpoint = Path("/tmp/noridrive-tray-endpoint.json")
+endpoint = Path("/tmp/filenode-tray-endpoint.json")
 
 
 if sys.argv[1] == "host":

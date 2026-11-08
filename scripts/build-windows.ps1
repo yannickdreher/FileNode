@@ -14,7 +14,7 @@ try {
     }
     if (!$RustCorePath) {
         if (!(Get-Command cargo -CommandType Application -ErrorAction SilentlyContinue)) {
-            throw 'Cargo was not found. Install Rust with rustup (https://rust-lang.org/tools/install/), and add Desktop development with C++ plus the Windows SDK in Visual Studio Installer. Restart VS Code after installation. To test an existing build without Cargo, choose the NoriDrive: Windows existing build launch profile. See docs/development.md.'
+            throw 'Cargo was not found. Install Rust with rustup (https://rust-lang.org/tools/install/), and add Desktop development with C++ plus the Windows SDK in Visual Studio Installer. Restart VS Code after installation. To test an existing build without Cargo, choose the FileNode: Windows existing build launch profile. See docs/development.md.'
         }
         $driveTarget = if ($Platform -eq 'ARM64') { 'aarch64-pc-windows-msvc' } else { 'x86_64-pc-windows-msvc' }
         $driveCargoArgs = @('build', '--locked', '--target', $driveTarget)
@@ -22,10 +22,10 @@ try {
         & cargo @driveCargoArgs
         if ($LASTEXITCODE -ne 0) { throw 'Rust build failed. Install the MSVC Rust toolchain, C++ build tools and Windows SDK.' }
         $driveProfile = $Configuration.ToLowerInvariant()
-        $RustCorePath = Join-Path $driveProject "target\$driveTarget\$driveProfile\noridrive.exe"
+        $RustCorePath = Join-Path $driveProject "target\$driveTarget\$driveProfile\filenode.exe"
     }
     $RustCorePath = (Resolve-Path -LiteralPath $RustCorePath).Path
-    $driveBuildArgs = @('build', 'apps/windows/NoriDrive.Windows.csproj', '-c', $Configuration, "-p:Platform=$Platform", "-p:RustCorePath=$RustCorePath")
+    $driveBuildArgs = @('build', 'apps/windows/FileNode.Windows.csproj', '-c', $Configuration, "-p:Platform=$Platform", "-p:RustCorePath=$RustCorePath")
     if ($OutputDirectory) {
         # WinUI concatenates OutputPath and App.xbf. Preserve the final separator.
         $driveOutput = [System.IO.Path]::GetFullPath($OutputDirectory).Replace('\', '/').TrimEnd('/') + '/'

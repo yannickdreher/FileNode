@@ -2,7 +2,7 @@
 *.sqlite*
 *.part
 .env
-.noritec-drive/
+.filenode/
 
 .cargo/
 dist/

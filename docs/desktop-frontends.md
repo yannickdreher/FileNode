@@ -14,7 +14,7 @@ These are build projects in the same GitHub repository. Separate repositories wo
 
 ## Process lifetime and protocol
 
-Each desktop host launches an adjacent `noridrive-core[.exe] --service` with private redirected stdin/stdout. Frames are UTF-8 JSON followed by a newline. The worker's `ready` event declares `protocol: 2` and the password-free configuration. Commands are bounded to 1 MiB; UI event buffers are bounded to 16 MiB. No permanent IPC port is exposed. An explicit browser sign-in temporarily listens on IPv4 loopback for its OAuth callback. Windows uses AppInstance to redirect another launch of the same profile to the existing UI; the Rust store additionally enforces one writer per local folder on both platforms.
+Each desktop host launches an adjacent `filenode-core[.exe] --service` with private redirected stdin/stdout. Frames are UTF-8 JSON followed by a newline. The worker's `ready` event declares `protocol: 2` and the password-free configuration. Commands are bounded to 1 MiB; UI event buffers are bounded to 16 MiB. No permanent IPC port is exposed. An explicit browser sign-in temporarily listens on IPv4 loopback for its OAuth callback. Windows uses AppInstance to redirect another launch of the same profile to the existing UI; the Rust store additionally enforces one writer per local folder on both platforms.
 
 Commands: `configure {config}`, `connect {password?,interactive?}`, `pause`, `check`, `power {saver,sleeping,available}`, `quit`. Events: `ready`, `configured`, `running`, `status`, `report`, `activity`, `retry`, `error`, `power`, `open_browser`. A frontend waits for successful configuration before connecting. Only Rust accesses the OS credential store. A supplied app password crosses the inherited input pipe, never command-line arguments. UI runtimes can retain managed string allocations; the app does not claim complete secret-memory erasure. See [browser authentication](browser-authentication.md) for token handling and provider requirements.
 
@@ -22,7 +22,7 @@ Closing windows keeps the host and worker alive. Quit closes the worker cleanly;
 
 ## Windows
 
-`NoriDrive.Windows.csproj` uses actual Microsoft WinUI controls and the stable Windows App SDK package pinned in the project. UI code is C#; the sync implementation remains Rust. A normal debug build is unpackaged and self-contained. Build with `scripts/build-windows.ps1`; use `-RustCorePath <existing.exe>` to supply a separately built worker. `-Platform ARM64` builds the matching Rust MSVC target when the target/toolchain is installed. ARM64 runtime behavior has not been validated.
+`FileNode.Windows.csproj` uses actual Microsoft WinUI controls and the stable Windows App SDK package pinned in the project. UI code is C#; the sync implementation remains Rust. A normal debug build is unpackaged and self-contained. Build with `scripts/build-windows.ps1`; use `-RustCorePath <existing.exe>` to supply a separately built worker. `-Platform ARM64` builds the matching Rust MSVC target when the target/toolchain is installed. ARM64 runtime behavior has not been validated.
 
 `-Configuration Release -Package` creates an unsigned MSIX in `apps/windows/AppPackages`. The project refuses packaging if the Rust executable is missing. `Package.appxmanifest` includes desktop full-trust capability and an opt-in startup task. Packaged startup uses Windows StartupTask; unpackaged startup uses HKCU. Package creation never registers, installs or submits the app.
 

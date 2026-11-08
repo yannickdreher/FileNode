@@ -2,7 +2,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.Windows.AppLifecycle;
 using System.Runtime.InteropServices;
 
-namespace Noritec.NoriDrive.Windows;
+namespace FileNode.Windows;
 
 public partial class App : Application
 {
@@ -52,7 +52,7 @@ public partial class App : Application
             }
             var identity = profile is null ? "default" : Path.GetFullPath(profile).ToUpperInvariant();
             var key = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identity)));
-            var instance = AppInstance.FindOrRegisterForKey("NoritecDrive-" + key);
+            var instance = AppInstance.FindOrRegisterForKey("FileNode-" + key);
             if (!instance.IsCurrent)
             {
                 await instance.RedirectActivationToAsync(AppInstance.GetCurrent().GetActivatedEventArgs());

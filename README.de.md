@@ -1,6 +1,6 @@
-# NoriDrive
+# FileNode
 
-Deutsch · [English](README.md) · [Website](https://yannickdreher.github.io/NoriDrive/) · [Downloads](https://github.com/yannickdreher/NoriDrive/releases)
+Deutsch · [English](README.md) · [Website](https://yannickdreher.github.io/FileNode/) · [Downloads](https://github.com/yannickdreher/FileNode/releases)
 
 JMAP-Dateisynchronisation für Windows und Linux mit gemeinsamem Rust-Kern. Windows verwendet ein eigenes **WinUI-3-/C#-Projekt**, Linux ein getrenntes **Qt-6-/C++-/QML-Projekt**. Die Oberfläche ist Deutsch/Englisch, Code und technische Diagnosen sind Englisch. Version 0.1 bleibt eine Preview.
 
@@ -14,7 +14,7 @@ Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regel
 
 - Vollständige lokale Dateien, bidirektionaler Abgleich, SHA-256-Inhaltsvergleich, SQLite-Dreiwege-Abgleich und dauerhaftes Journal.
 - Bei Konflikten bleiben beide Fassungen erhalten. Remote-Umbenennungen nutzen stabile IDs; eindeutige lokale Dateiumbenennungen erhalten die Server-Identität.
-- Löschweitergabe erst nach Aktivierung, mit Schutz vor Massenlöschungen. Vorherige Fassungen liegen lokal in `.noritec-drive/history` und remote in `.noritec-drive-trash`. Kein `FileNode/destroy`.
+- Löschweitergabe erst nach Aktivierung, mit Schutz vor Massenlöschungen. Vorherige Fassungen liegen lokal in `.filenode/history` und remote in `.filenode-trash`. Kein `FileNode/destroy`.
 - Native Dateisystem-Ereignisse unter Windows und Linux, Bündelung von Änderungen, Hash-Cache, regelmäßige vollständige Kontrolle und JMAP `FileNode/changes`.
 - Upload und Download getrennt in KiB/s begrenzen, auch während des Betriebs. Null bedeutet unbegrenzt.
 - Gesperrte Dateien werden zurückgestellt; geänderte Dateien müssen über mehrere Beobachtungen stabil bleiben. Andere oberste Dateigruppen können weiter synchronisieren.
@@ -29,7 +29,7 @@ Windows mit Rust MSVC, C++ Build Tools, .NET 10 und Windows SDK:
 
 ```powershell
 powershell.exe -NoProfile -File scripts/build-windows.ps1
-& apps/windows/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64/noridrive-ui.exe
+& apps/windows/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64/filenode-ui.exe
 # Unsigniertes lokales MSIX erstellen, ohne Installation oder Veröffentlichung:
 powershell.exe -NoProfile -File scripts/build-windows.ps1 -Configuration Release -Package
 ```
@@ -38,7 +38,7 @@ Linux mit Qt 6.4+ samt Entwicklungs- und QML-Laufzeitmodulen:
 
 ```sh
 sh scripts/build-linux.sh
-./target/debug/noridrive-ui
+./target/debug/filenode-ui
 ```
 
 Pull Requests führen Linux- und native Windows-Prüfungen in GitHub Actions aus. Nach einem Merge in `main` plant semantic-release die Version, baut beide Plattformen und veröffentlicht einen GitHub-Release mit Änderungsnotizen, Downloads und Prüfsummen. Die bereitgestellten Windows-Runner benötigen keine eigene Runner-Installation. GitHub Pages veröffentlicht die deutsch/englische Website. Siehe [Releases](docs/releases.md).
@@ -49,18 +49,17 @@ Unter Einstellungen Server und Benutzername eingeben. Vorgaben sind `https://jma
 
 Auf der Kontoseite speichert **Anmelden** die Eingaben vor der Authentifizierung. Das Remote-Ziel entsteht automatisch: Der lokale Ordner `C:\Users\yannick\Desktop` wird in den Remote-Ordner `Desktop` auf der obersten Ebene synchronisiert. Es gibt kein Remote-Ordnerfeld und keine Auswahl des Kontostammverzeichnisses. Vorhandene lokale Zustände bleiben an ihre ursprüngliche Remote-Ordner-ID gebunden. Verwendete ein älteres Profil einen anderen Namen, einen neuen lokalen Ordner wählen; den gespeicherten Zustand nicht löschen.
 
-Beim Umbenennen zu NoriDrive bleiben vorhandene Profilpfade, der Credential-Dienst und interne Zustands-/Sicherungsverzeichnisse erhalten. Bereits konfigurierte lokale und Remote-Ordner werden nicht verschoben oder umbenannt. Das Repository heißt [yannickdreher/NoriDrive](https://github.com/yannickdreher/NoriDrive).
 
-Ein eingerichtetes Konto setzt die Synchronisation beim Start von NoriDrive fort. Dafür gibt es keine separate Startoption. Die Browser-Authentifizierung verwendet gespeicherte Tokens; eine interaktive Browser-Anmeldung wird weiterhin nur über die Anmeldeaktion gestartet.
+Ein eingerichtetes Konto setzt die Synchronisation beim Start von FileNode fort. Dafür gibt es keine separate Startoption. Die Browser-Authentifizierung verwendet gespeicherte Tokens; eine interaktive Browser-Anmeldung wird weiterhin nur über die Anmeldeaktion gestartet.
 
-Passwortfreie Profile liegen unter Windows in `%APPDATA%\Noritec\Drive\config\config.toml`, unter Linux in `$XDG_CONFIG_HOME/drive/config.toml` beziehungsweise `~/.config/drive/config.toml`. `--config <Pfad>` wählt ein anderes Profil. Optionen stehen in [config.example.toml](config.example.toml). Bei mehrdeutiger Kontenerkennung `account_id` setzen.
+Passwortfreie Profile liegen unter Windows in `%APPDATA%\FileNode\config\config.toml`, unter Linux in `$XDG_CONFIG_HOME/filenode/config.toml` beziehungsweise `~/.config/filenode/config.toml`. `--config <Pfad>` wählt ein anderes Profil. Optionen stehen in [config.example.toml](config.example.toml). Bei mehrdeutiger Kontenerkennung `account_id` setzen.
 
 ```sh
-noridrive --headless --config /absolut/profil.toml --dry-run
-noridrive --headless --config /absolut/profil.toml --once --language de
+filenode --headless --config /absolut/profil.toml --dry-run
+filenode --headless --config /absolut/profil.toml --once --language de
 ```
 
-Headless muss der absolute lokale Ordner bereits existieren. Browser-Profile verwenden und erneuern die zuvor in der Desktop-App eingerichtete Sitzung ohne Browserstart. App-Passwort-Profile verwenden den OS-Schlüsselspeicher oder `NORIDRIVE_PASSWORD` aus einem Secret Manager; `NORITEC_DRIVE_PASSWORD` bleibt kompatibel. Keine Passwörter in TOML oder Kommandozeilenargumente schreiben. `--dry-run` kann interne Metadaten anlegen, verändert aber keine Nutzdateien oder Remote-Objekte. `--once` wartet zunächst auf stabile Dateien und liefert nach zweimal der eingestellten Wartezeit plus 30 Sekunden einen Fehler, falls sie weiterhin gesperrt oder in Änderung sind. Die Desktop-App versucht es weiter. Headless abonniert keine Desktop-Energieereignisse.
+Headless muss der absolute lokale Ordner bereits existieren. Browser-Profile verwenden und erneuern die zuvor in der Desktop-App eingerichtete Sitzung ohne Browserstart. App-Passwort-Profile verwenden den OS-Schlüsselspeicher oder `FILENODE_PASSWORD` aus einem Secret Manager; `FILENODE_PASSWORD` bleibt kompatibel. Keine Passwörter in TOML oder Kommandozeilenargumente schreiben. `--dry-run` kann interne Metadaten anlegen, verändert aber keine Nutzdateien oder Remote-Objekte. `--once` wartet zunächst auf stabile Dateien und liefert nach zweimal der eingestellten Wartezeit plus 30 Sekunden einen Fehler, falls sie weiterhin gesperrt oder in Änderung sind. Die Desktop-App versucht es weiter. Headless abonniert keine Desktop-Energieereignisse.
 
 ## Grenzen und Wiederherstellung
 
@@ -68,6 +67,6 @@ Noch offen sind Dateien bei Bedarf, Explorer-Platzhalter, Blockübertragungen, R
 
 Der komplette Namensraum wird weiterhin eingelesen; der Cache spart Inhaltszugriffe. Dateisperren und eine Wartezeit reduzieren Rennen, garantieren aber nicht für jedes Programm das Ende eines Schreibvorgangs. Unix-Sperren sind kooperativ. Bandbreitengrenzen betreffen Nutzdaten, nicht TLS-/HTTP-Overhead und Socket-Puffer. Weitere Grenzen stehen in der [Architektur](docs/architecture.md).
 
-`.noritec-drive` nicht zur Reparatur löschen: Hier liegen Baseline, Journal, Teilübertragungen und Wiederherstellungskopien. Vor dem Zurückkopieren alter Fassungen den Abgleich pausieren. Lokale Kopien liegen in `.noritec-drive/history`, Remote-Kopien in `.noritec-drive-trash`, erreichbar etwa über Bulwark. Die Ablagen haben keine automatische Aufbewahrungsfrist und verbrauchen Speicher/Quota. Unabhängige Backups bleiben nötig.
+`.filenode` nicht zur Reparatur löschen: Hier liegen Baseline, Journal, Teilübertragungen und Wiederherstellungskopien. Vor dem Zurückkopieren alter Fassungen den Abgleich pausieren. Lokale Kopien liegen in `.filenode/history`, Remote-Kopien in `.filenode-trash`, erreichbar etwa über Bulwark. Die Ablagen haben keine automatische Aufbewahrungsfrist und verbrauchen Speicher/Quota. Unabhängige Backups bleiben nötig.
 
 Adapter berücksichtigen Stalwart 0.16 `nodeType`/`type` und das neuere `@type`/`mediaType`-Schema. Lokale HTTP-Tests prüfen beide; Live-Stalwart-Abnahme, Stromausfälle und große Bestände auf mehreren Geräten stehen weiterhin aus.

@@ -106,7 +106,7 @@ impl Jmap {
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(120))
-            .user_agent(concat!("NoriDrive/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("FileNode/", env!("CARGO_PKG_VERSION")))
             .build()?;
         let mut discovery = origin.join("/.well-known/jmap")?;
         let mut session = None;
@@ -898,7 +898,7 @@ mod tests {
                 let mut file = json!({"id":"file","name":"a.txt","parentId":"root","blobId":"original","size":5});
                 file[if modern { "@type" } else { "nodeType" }] =
                     json!(if modern { "File" } else { "file" });
-                let mut root = json!({"id":"root","name":"NoriDrive","parentId":null});
+                let mut root = json!({"id":"root","name":"FileNode","parentId":null});
                 root[if modern { "@type" } else { "nodeType" }] =
                     json!(if modern { "Directory" } else { "directory" });
                 let result = match index {

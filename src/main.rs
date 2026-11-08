@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use noridrive::{
+use filenode::{
     config::Config,
     engine, filesystem,
     i18n::{Language, Message},
@@ -23,7 +23,7 @@ mod autostart;
 mod service;
 
 #[derive(Parser)]
-#[command(version, about = "NoriDrive — JMAP Files for Windows and Linux")]
+#[command(version, about = "FileNode — JMAP Files for Windows and Linux")]
 struct Args {
     /// Run without the desktop interface
     #[arg(long)]
@@ -69,9 +69,9 @@ fn main() -> Result<()> {
     }
     if !args.headless && !args.once && !args.dry_run {
         let executable = std::env::current_exe()?.with_file_name(if cfg!(windows) {
-            "noridrive-ui.exe"
+            "filenode-ui.exe"
         } else {
-            "noridrive-ui"
+            "filenode-ui"
         });
         let mut command = std::process::Command::new(executable);
         if let Some(language) = args.language {
@@ -106,14 +106,14 @@ fn main() -> Result<()> {
     config.validate()?;
     let mut store = Store::open(&config)?;
     let cancel = Arc::new(AtomicBool::new(false));
-    let authentication = if config.auth_mode == noridrive::config::AuthMode::Browser {
-        noridrive::auth::browser_authentication(&config, false, &cancel, |_| {})?
+    let authentication = if config.auth_mode == filenode::config::AuthMode::Browser {
+        filenode::auth::browser_authentication(&config, false, &cancel, |_| {})?
     } else {
-        noridrive::auth::Authentication::basic(&config.username, password(&config)?)
+        filenode::auth::Authentication::basic(&config.username, password(&config)?)
     };
     let mut remote = Jmap::connect_authenticated(&config, authentication, cancel.clone())?;
     let mut scanner =
-        noridrive::scanner::LocalScanner::new(&config.local_folder, config.full_scan_seconds);
+        filenode::scanner::LocalScanner::new(&config.local_folder, config.full_scan_seconds);
     if args.dry_run {
         let local = filesystem::scan(&config.local_folder, config.max_file_bytes)?;
         let snapshot = remote.snapshot(None)?;
@@ -129,7 +129,7 @@ fn main() -> Result<()> {
                 .map(|n| n.id.clone())
         });
         let tree = match root {
-            Some(root) => noridrive::jmap::scoped_tree(&snapshot, Some(&root))?,
+            Some(root) => filenode::jmap::scoped_tree(&snapshot, Some(&root))?,
             None => Default::default(),
         };
         println!(
@@ -202,25 +202,20 @@ fn main() -> Result<()> {
 }
 
 fn password(config: &Config) -> Result<String> {
-    if let Ok(value) = std::env::var("NORIDRIVE_PASSWORD") {
-        if !value.is_empty() {
-            return Ok(value);
-        }
-    }
-    if let Ok(value) = std::env::var("NORITEC_DRIVE_PASSWORD") {
+    if let Ok(value) = std::env::var("FILENODE_PASSWORD") {
         if !value.is_empty() {
             return Ok(value);
         }
     }
     #[cfg(feature = "desktop")]
     {
-        keyring::Entry::new("de.noritec.drive", &config.credential_key())?
+        keyring::Entry::new("FileNode", &config.credential_key())?
             .get_password()
             .context("App password is missing from the operating system credential store")
     }
     #[cfg(not(feature = "desktop"))]
     {
         let _ = config;
-        anyhow::bail!("NORITEC_DRIVE_PASSWORD is not set")
+        anyhow::bail!("FILENODE_PASSWORD is not set")
     }
 }

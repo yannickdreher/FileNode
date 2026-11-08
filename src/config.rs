@@ -58,7 +58,7 @@ impl Default for Config {
             oauth_scopes: "urn:ietf:params:oauth:scope:files offline_access".into(),
             oauth_redirect_port: 0,
             account_id: None,
-            local_folder: home.join("NoriDrive"),
+            local_folder: home.join("FileNode"),
             interval_seconds: 30,
             full_scan_seconds: 900,
             upload_limit_kib: 0,
@@ -161,8 +161,8 @@ impl Config {
     }
 
     pub fn default_path() -> Result<PathBuf> {
-        // Preserve the existing profile location across the NoriDrive rename.
-        Ok(directories::ProjectDirs::from("de", "Noritec", "Drive")
+        // FileNode uses its own application profile namespace.
+        Ok(directories::ProjectDirs::from("", "", "FileNode")
             .context("User configuration directory is unavailable")?
             .config_dir()
             .join("config.toml"))

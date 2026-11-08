@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Noritec.NoriDrive.Windows;
+namespace FileNode.Windows;
 
 // Explorer notification icon and power notifications share the WinUI window's message loop.
 internal sealed class NativeTray : IDisposable
@@ -36,11 +36,11 @@ internal sealed class NativeTray : IDisposable
         this.window = window; this.translate = translate; this.action = action; this.power = power;
         callback = Message;
         if (!SetWindowSubclass(window, callback, 1, 0)) throw new InvalidOperationException("Unable to subscribe to native window messages");
-        icon = LoadImage(0, Path.Combine(AppContext.BaseDirectory, "Assets", "drive.ico"), 1, 0, 0, 0x10 | 0x40);
+        icon = LoadImage(0, Path.Combine(AppContext.BaseDirectory, "Assets", "filenode.ico"), 1, 0, 0, 0x10 | 0x40);
         taskbarCreated = RegisterWindowMessage("TaskbarCreated");
         var setting = new Guid("e00958c0-c213-4ace-ac77-fecced2eeea5");
         powerRegistration = RegisterPowerSettingNotification(window, ref setting, 0);
-        Update("NoriDrive");
+        Update("FileNode");
         RefreshPower();
     }
     private NotifyData Data(string text) => new()
@@ -60,7 +60,7 @@ internal sealed class NativeTray : IDisposable
     }
     private nint Message(nint hwnd, uint message, nuint wparam, nint lparam, nuint id, nuint data)
     {
-        if (message == taskbarCreated) { Available = false; Update("NoriDrive"); }
+        if (message == taskbarCreated) { Available = false; Update("FileNode"); }
         if (message == Callback)
         {
             var mouse = (uint)lparam & 0xffff;

@@ -1,7 +1,7 @@
 //! Stateful integration tests: real filesystem + SQLite, simulated immutable
 //! JMAP blobs and global ifInState. No production account is ever contacted.
 use anyhow::{bail, Result};
-use noridrive::{config::Config, engine, filesystem, jmap::Remote, model::*, store::Store};
+use filenode::{config::Config, engine, filesystem, jmap::Remote, model::*, store::Store};
 use std::{collections::HashMap, fs, path::Path, sync::atomic::AtomicBool};
 
 #[test]
@@ -31,7 +31,7 @@ fn locked_file_is_deferred_without_deletion_while_other_files_sync() {
 
 #[test]
 fn changing_file_must_settle_before_upload() {
-    use noridrive::scanner::LocalScanner;
+    use filenode::scanner::LocalScanner;
     use std::time::Duration;
     let mut f = Fixture::new();
     f.config.file_settle_seconds = 1;
@@ -66,7 +66,7 @@ fn changing_file_must_settle_before_upload() {
 
 #[test]
 fn power_pause_prevents_scan_and_remote_mutations_until_resumed() {
-    use noridrive::runtime::{Policy, PowerState, Scope};
+    use filenode::runtime::{Policy, PowerState, Scope};
     use std::sync::Arc;
     let mut f = Fixture::new();
     f.local("a.txt", "one");
@@ -88,7 +88,7 @@ fn idle_sync_reuses_hashes_and_does_not_rewrite_unchanged_baselines() {
     let mut fixture = Fixture::new();
     fixture.local("a.txt", "one");
     let mut store = Store::open(&fixture.config).unwrap();
-    let mut scanner = noridrive::scanner::LocalScanner::new(fixture.folder.path(), 900);
+    let mut scanner = filenode::scanner::LocalScanner::new(fixture.folder.path(), 900);
     for _ in 0..2 {
         engine::sync_with_scanner(
             &fixture.config,

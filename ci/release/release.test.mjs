@@ -37,7 +37,7 @@ test("notes include documentation, CI and non-conventional changes", async () =>
   const notes = await generateNotes({}, {
     commits: ["docs: clarify setup", "ci: update runner", "Update translations"].map(message => ({ message, hash: commit })),
     lastRelease: {}, nextRelease: { version: "1.0.0", gitTag: "v1.0.0", gitHead: commit },
-    options: { repositoryUrl: "https://github.com/yannickdreher/NoriDrive.git" }, cwd: process.cwd(), logger,
+    options: { repositoryUrl: "https://github.com/yannickdreher/FileNode.git" }, cwd: process.cwd(), logger,
   });
   for (const text of ["clarify setup", "update runner", "Update translations"]) assert.ok(notes.includes(text), text);
   assert.ok(notes.includes("/commit/"), "Release notes must link to GitHub commit pages.");
@@ -46,7 +46,7 @@ test("notes include documentation, CI and non-conventional changes", async () =>
 });
 
 test("publishing requires both platforms, the same commit and intact binary checksums", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "noridrive-assets-"));
+  const directory = await mkdtemp(path.join(tmpdir(), "filenode-assets-"));
   try {
     for (const platform of ["linux", "windows"]) {
       for (const name of filenames("1.2.3", platform)) await writeFile(path.join(directory, name), "binary fixture");
@@ -64,8 +64,8 @@ test("publishing requires both platforms, the same commit and intact binary chec
 
 test("one planned version stamps Cargo, lockfile, WinUI, MSIX and Qt together", async () => {
   const root = process.cwd();
-  const directory = await mkdtemp(path.join(tmpdir(), "noridrive-stamp-"));
-  const files = ["Cargo.toml", "Cargo.lock", "apps/linux/CMakeLists.txt", "apps/windows/NoriDrive.Windows.csproj", "apps/windows/Package.appxmanifest"];
+  const directory = await mkdtemp(path.join(tmpdir(), "filenode-stamp-"));
+  const files = ["Cargo.toml", "Cargo.lock", "apps/linux/CMakeLists.txt", "apps/windows/FileNode.Windows.csproj", "apps/windows/Package.appxmanifest"];
   try {
     for (const filename of files) {
       await mkdir(path.dirname(path.join(directory, filename)), { recursive: true });

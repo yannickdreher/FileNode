@@ -27,7 +27,7 @@ Backend::Backend(QString core, QString profile, bool noTray, bool background, QO
     m_toggle = m_menu.addAction("", this, [this] { m_running ? pause() : start(); });
     m_check = m_menu.addAction("", this, &Backend::check); m_open = m_menu.addAction("", this, &Backend::openFolder);
     m_menu.addSeparator(); m_quit = m_menu.addAction("", this, &Backend::quit);
-    m_tray.setIcon(QIcon(":/drive.svg")); m_tray.setContextMenu(&m_menu);
+    m_tray.setIcon(QIcon(":/filenode.svg")); m_tray.setContextMenu(&m_menu);
     connect(&m_tray, &QSystemTrayIcon::activated, this, [this](QSystemTrayIcon::ActivationReason reason) { if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) emit showStatus(); });
     if (m_trayAvailable) m_tray.show();
     connect(&m_power, &PowerMonitor::changed, this, &Backend::publishPower);
@@ -118,7 +118,7 @@ void Backend::openOnline() {
     QUrl url(m_config.value("web_url").toString());
     if (url.scheme() == "https" && url.userInfo().isEmpty()) QDesktopServices::openUrl(url);
 }
-void Backend::openRecovery() { QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(m_config.value("local_folder").toString()).filePath(".noritec-drive/history"))); }
+void Backend::openRecovery() { QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(m_config.value("local_folder").toString()).filePath(".filenode/history"))); }
 void Backend::quit() { m_quitting = true; send({{"command","quit"}}); if (m_core.state() == QProcess::NotRunning) qApp->quit(); }
 QPoint Backend::popupPosition(int width, int height) const {
     const auto tray = m_tray.geometry();
@@ -133,5 +133,5 @@ void Backend::injectPower(bool saver, bool sleeping) { m_power.saver = saver; m_
 void Backend::updateTray() {
     m_show->setText(translate("tray.show")); m_settings->setText(translate("tray.settings"));
     m_toggle->setText(translate(m_running ? "action.pause" : "action.resume")); m_check->setText(translate("action.check")); m_check->setEnabled(m_running);
-    m_open->setText(translate("action.open")); m_quit->setText(translate("tray.quit")); m_tray.setToolTip("NoriDrive — " + status());
+    m_open->setText(translate("action.open")); m_quit->setText(translate("tray.quit")); m_tray.setToolTip("FileNode — " + status());
 }

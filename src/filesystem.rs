@@ -9,8 +9,8 @@ use std::{
 };
 use unicode_normalization::UnicodeNormalization;
 
-pub const PRIVATE_DIR: &str = ".noritec-drive";
-pub const REMOTE_TRASH: &str = ".noritec-drive-trash";
+pub const PRIVATE_DIR: &str = ".filenode";
+pub const REMOTE_TRASH: &str = ".filenode-trash";
 
 pub fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
@@ -268,7 +268,7 @@ mod tests {
             "a/NUL.txt",
             "a/CON",
             "a.",
-            ".noritec-drive/db",
+            ".filenode/db",
             "a//b",
         ] {
             assert!(checked_path(root.path(), p).is_err(), "{p}");

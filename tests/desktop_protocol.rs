@@ -17,8 +17,8 @@ fn worker_versions_protocol_validates_settings_and_applies_power_policy() {
         "auto_connect = false\nremote_folder = \"Legacy folder\"\nusername = \"\"\n",
     )
     .unwrap();
-    let executable = std::env::var_os("NORITEC_DRIVE_TEST_CORE")
-        .unwrap_or_else(|| env!("CARGO_BIN_EXE_noridrive").into());
+    let executable = std::env::var_os("FILENODE_TEST_CORE")
+        .unwrap_or_else(|| env!("CARGO_BIN_EXE_filenode").into());
     let mut child = Command::new(executable)
         .args(["--service", "--external-autostart", "--config"])
         .arg(&profile)

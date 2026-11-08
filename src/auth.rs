@@ -125,7 +125,7 @@ fn http_client() -> Result<Client> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(30))
-        .user_agent(concat!("NoriDrive/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("FileNode/", env!("CARGO_PKG_VERSION")))
         .build()?)
 }
 fn document(response: Response) -> Result<Value> {
@@ -323,7 +323,7 @@ impl TokenSession {
 
 #[cfg(feature = "desktop")]
 fn load_credential(key: &str) -> Result<Option<Zeroizing<String>>> {
-    match keyring::Entry::new("de.noritec.drive", key)?.get_password() {
+    match keyring::Entry::new("FileNode", key)?.get_password() {
         Ok(secret) => Ok(Some(Zeroizing::new(secret))),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(error) => Err(error).context("OAuth credential store unavailable"),
@@ -335,7 +335,7 @@ fn load_credential(_: &str) -> Result<Option<Zeroizing<String>>> {
 }
 #[cfg(feature = "desktop")]
 fn save_credential(key: &str, secret: &str) -> Result<()> {
-    keyring::Entry::new("de.noritec.drive", key)?
+    keyring::Entry::new("FileNode", key)?
         .set_password(secret)
         .context("Cannot persist OAuth token rotation in OS credential store")
 }
@@ -421,7 +421,7 @@ fn authorize(
             test_http,
         )?;
         let value = document(client.post(target).json(&json!({
-            "client_name":"NoriDrive", "application_type":"native", "redirect_uris":[redirect],
+            "client_name":"FileNode", "application_type":"native", "redirect_uris":[redirect],
             "token_endpoint_auth_method":"none", "grant_types":["authorization_code","refresh_token"],
             "response_types":["code"], "scope":config.oauth_scopes,
         })).send()?)?;
@@ -572,9 +572,9 @@ fn wait_for_callback(
                     .err()
                     .is_some_and(|error| error.downcast_ref::<SignInRequired>().is_some());
                 let (status, body) = if valid {
-                    ("200 OK", "NoriDrive: Browser response received. Return to the application to complete sign-in. / Browser-Antwort empfangen. Zurueck zu NoriDrive, um die Anmeldung abzuschliessen.")
+                    ("200 OK", "FileNode: Browser response received. Return to the application to complete sign-in. / Browser-Antwort empfangen. Zurueck zu FileNode, um die Anmeldung abzuschliessen.")
                 } else {
-                    ("400 Bad Request", "NoriDrive: Sign-in not completed. Return to the application. / Anmeldung nicht abgeschlossen. Zur App zurueckkehren.")
+                    ("400 Bad Request", "FileNode: Sign-in not completed. Return to the application. / Anmeldung nicht abgeschlossen. Zur App zurueckkehren.")
                 };
                 let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{body}", body.len());
                 if valid || declined {
@@ -768,7 +768,7 @@ mod tests {
                 1 => {
                     assert!(first.starts_with("POST /register "));
                     let value: Value = serde_json::from_str(body).unwrap();
-                    assert_eq!(value["client_name"], "NoriDrive");
+                    assert_eq!(value["client_name"], "FileNode");
                     assert_eq!(value["token_endpoint_auth_method"], "none");
                     assert!(value.get("client_secret").is_none());
                     (201, json!({"client_id":"registered-test-client"}))

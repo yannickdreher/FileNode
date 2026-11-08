@@ -4,7 +4,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $driveProject = Split-Path -Parent $PSScriptRoot
-if (!$Executable) { $Executable = Join-Path $driveProject '.dev\noridrive-preview\noridrive-ui.exe' }
+if (!$Executable) { $Executable = Join-Path $driveProject '.dev\filenode-preview\filenode-ui.exe' }
 if (!$OutputDirectory) { $OutputDirectory = Join-Path $driveProject 'artifacts\windows-smoke' }
 $Executable = (Resolve-Path -LiteralPath $Executable).Path
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)

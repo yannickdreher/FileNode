@@ -41,7 +41,7 @@ impl Store {
             .write(true)
             .open(folder.join("lock"))?;
         lock.try_lock_exclusive()
-            .context("Another NoriDrive process is using this folder")?;
+            .context("Another FileNode process is using this folder")?;
         let db = Connection::open(folder.join("state.sqlite"))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);

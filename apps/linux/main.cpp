@@ -14,8 +14,8 @@
 
 int main(int argc, char **argv) {
     QApplication application(argc, argv);
-    application.setApplicationVersion(NORIDRIVE_VERSION);
-    application.setApplicationName("NoriDrive"); application.setOrganizationName("Noritec"); application.setQuitOnLastWindowClosed(false);
+    application.setApplicationVersion(FILENODE_VERSION);
+    application.setApplicationName("FileNode"); application.setOrganizationName("FileNode"); application.setQuitOnLastWindowClosed(false);
     QCommandLineParser parser; parser.addHelpOption(); parser.addVersionOption();
     parser.addOptions({QCommandLineOption("core", "Rust service executable", "path"), QCommandLineOption("config", "Profile path", "path"), QCommandLineOption("background", "Start in tray"), QCommandLineOption("settings", "Open settings"), QCommandLineOption("no-tray", "Disable tray"), QCommandLineOption("self-test", "Offline UI smoke test and screenshot directory", "directory")});
     parser.addOption(QCommandLineOption("self-test-account", "Capture account settings during the offline self-test"));
@@ -30,14 +30,14 @@ int main(int argc, char **argv) {
         }
     }
     auto core = parser.value("core");
-    if (core.isEmpty()) core = QDir(application.applicationDirPath()).filePath("noridrive-core");
+    if (core.isEmpty()) core = QDir(application.applicationDirPath()).filePath("filenode-core");
     Backend backend(core, parser.value("config"), parser.isSet("no-tray"), parser.isSet("background"));
     QQmlApplicationEngine engine;
     engine.rootContext()->setContextProperty("App", &backend);
     engine.rootContext()->setContextProperty("startSettings", parser.isSet("settings"));
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty()) return 1;
-    application.setWindowIcon(QIcon(":/drive.svg"));
+    application.setWindowIcon(QIcon(":/filenode.svg"));
     auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
     backend.powerMonitor()->watchWindow(window);
     if (parser.isSet("self-test")) {

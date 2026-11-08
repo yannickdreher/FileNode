@@ -1274,7 +1274,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "noridrive"
+name = "filenode"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -14,7 +14,7 @@ pub fn set_executable(enabled: bool, profile: &Path, executable: &Path) -> Resul
         if enabled {
             let profile = std::path::absolute(profile)?;
             key.set_value(
-                "NoritecDrive",
+                "FileNode",
                 &format!(
                     "\"{}\" --background --config \"{}\"",
                     executable.display(),
@@ -22,7 +22,7 @@ pub fn set_executable(enabled: bool, profile: &Path, executable: &Path) -> Resul
                 ),
             )?;
         } else {
-            match key.delete_value("NoritecDrive") {
+            match key.delete_value("FileNode") {
                 Ok(()) => {}
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                 Err(error) => return Err(error.into()),
@@ -36,10 +36,10 @@ pub fn set_executable(enabled: bool, profile: &Path, executable: &Path) -> Resul
             .config_dir()
             .join("autostart");
         // Preserve the registration filename to avoid duplicate startup entries after a rename.
-        let target = directory.join("noritec-drive.desktop");
+        let target = directory.join("filenode.desktop");
         if enabled {
             let profile = std::path::absolute(profile)?;
-            let body = format!("[Desktop Entry]\nType=Application\nName=NoriDrive\nExec={} --background --config {}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n", quote_exec(executable)?, quote_exec(&profile)?);
+            let body = format!("[Desktop Entry]\nType=Application\nName=FileNode\nExec={} --background --config {}\nTerminal=false\nX-GNOME-Autostart-enabled=true\n", quote_exec(executable)?, quote_exec(&profile)?);
             std::fs::create_dir_all(directory)?;
             std::fs::write(target, body)?;
         } else {

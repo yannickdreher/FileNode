@@ -1,7 +1,7 @@
 //! Private JSON-lines protocol over inherited stdin/stdout; no listening socket.
 //! The per-user desktop host owns the tray and OS events; sync and credentials stay here.
 use anyhow::{bail, Context, Result};
-use noridrive::{
+use filenode::{
     auth::{self, Authentication},
     config::{AuthMode, Config},
     engine,
@@ -127,7 +127,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     std::fs::create_dir_all(&config.local_folder)?;
                     config.local_folder = config.local_folder.canonicalize()?;
                     config.validate()?;
-                    let entry = keyring::Entry::new("de.noritec.drive", &config.credential_key())?;
+                    let entry = keyring::Entry::new("FileNode", &config.credential_key())?;
                     let mut supplied =
                         Zeroizing::new(command["password"].as_str().unwrap_or("").to_owned());
                     if let Some(Value::String(password)) = command.get_mut("password") {

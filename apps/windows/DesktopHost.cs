@@ -8,11 +8,11 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics;
 
-namespace Noritec.NoriDrive.Windows;
+namespace FileNode.Windows;
 
 internal sealed class DesktopHost
 {
-    private readonly Window status = new() { Title = "NoriDrive" };
+    private readonly Window status = new() { Title = "FileNode" };
     private Window? settings;
     private readonly CoreClient core;
     private readonly NativeTray tray;
@@ -33,7 +33,7 @@ internal sealed class DesktopHost
         core = new CoreClient(status.DispatcherQueue);
         status.SystemBackdrop = new MicaBackdrop();
         status.AppWindow.Resize(new SizeInt32(440, 650));
-        status.AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "drive.ico"));
+        status.AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "filenode.ico"));
         tray = new NativeTray(WinRT.Interop.WindowNative.GetWindowHandle(status), key => core.T(key == "action.pause" && !core.Running ? "action.resume" : key),
             action => Dispatch(() => Act(action)), (saver, sleeping, available) => _ = core.Power(saver, sleeping, available));
         status.AppWindow.Closing += (sender, args) =>
@@ -75,7 +75,7 @@ internal sealed class DesktopHost
         var title = new Grid(); title.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); title.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
         var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
         brand.Children.Add(new Image { Source = new BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "icon.png"))), Width = 28, Height = 28 });
-        brand.Children.Add(new TextBlock { Text = "NoriDrive", FontSize = 22 });
+        brand.Children.Add(new TextBlock { Text = "FileNode", FontSize = 22 });
         title.Children.Add(brand);
         var gear = new Button { Content = new SymbolIcon(Symbol.Setting) }; gear.Click += (_, _) => ShowSettings(); Grid.SetColumn(gear, 1); title.Children.Add(gear);
         header.Children.Add(title); header.Children.Add(account); header.Children.Add(summary); header.Children.Add(error);
@@ -83,7 +83,7 @@ internal sealed class DesktopHost
         var footer = new StackPanel { Spacing = 8 };
         var links = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         links.Children.Add(Button("action.open", () => Open(core.Text("local_folder"))));
-        links.Children.Add(Button("action.online", OpenOnline)); links.Children.Add(Button("action.recovery", () => Open(Path.Combine(core.Text("local_folder"), ".noritec-drive", "history"))));
+        links.Children.Add(Button("action.online", OpenOnline)); links.Children.Add(Button("action.recovery", () => Open(Path.Combine(core.Text("local_folder"), ".filenode", "history"))));
         footer.Children.Add(links);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         toggle.Click += Toggle; actions.Children.Add(toggle);
@@ -114,7 +114,7 @@ internal sealed class DesktopHost
             row.Children.Add(new TextBlock { Text = core.Format(item["message"]!.AsObject()), TextWrapping = TextWrapping.Wrap });
             row.Children.Add(new TextBlock { Text = item["time"]!.ToString(), Opacity = .65, FontSize = 12 }); activity.Children.Add(row);
         }
-        tray.Update("NoriDrive — " + core.T(core.StatusKey));
+        tray.Update("FileNode — " + core.T(core.StatusKey));
         if (core.Ready && !powerPublished) { powerPublished = true; tray.RefreshPower(); }
         if (background && core.Ready)
         {
@@ -154,7 +154,7 @@ internal sealed class DesktopHost
     {
         if (settings is null)
         {
-            settings = new Window { Title = "NoriDrive — " + core.T("tray.settings"), SystemBackdrop = new MicaBackdrop() };
+            settings = new Window { Title = "FileNode — " + core.T("tray.settings"), SystemBackdrop = new MicaBackdrop() };
             settings.AppWindow.Resize(new SizeInt32(1000, 800));
             settings.AppWindow.Closing += (_, args) => { args.Cancel = true; settings.AppWindow.Hide(); if (!tray.Available) ShowStatus(); };
             BuildSettings();
@@ -277,7 +277,7 @@ internal sealed class DesktopHost
                 bool enabled = startup.IsOn;
                 if (App.IsPackaged)
                 {
-                    var task = await global::Windows.ApplicationModel.StartupTask.GetAsync("NoritecDriveStartup");
+                    var task = await global::Windows.ApplicationModel.StartupTask.GetAsync("FileNodeStartup");
                     if (enabled) { var state = await task.RequestEnableAsync(); enabled = state == global::Windows.ApplicationModel.StartupTaskState.Enabled; }
                     else task.Disable();
                 }

@@ -1,6 +1,6 @@
 # Releases and website
 
-The public repository is [yannickdreher/NoriDrive](https://github.com/yannickdreher/NoriDrive). The default and release branch is **main**. The commit history is retained from GitLab, with deployment URLs replaced by reserved example domains before publication. Sanitizing history changes the old commit hashes. GitLab is no longer the release destination.
+The public repository is [yannickdreher/FileNode](https://github.com/yannickdreher/FileNode). The default and release branch is **main**. The commit history is retained from GitLab, with deployment URLs replaced by reserved example domains before publication. Sanitizing history changes the old commit hashes. GitLab is no longer the release destination.
 
 ## GitHub Actions
 
@@ -17,10 +17,10 @@ Only planning and publishing have `contents: write`. They use the run's short-li
 
 ## Downloads
 
-- `noridrive-X.Y.Z-linux-x86_64.tar.gz`: Linux CLI, worker, Qt desktop frontend, docs and release notes. Requires Qt 6.4+, glibc compatible with Debian 12, D-Bus and a Secret Service. This is not a standalone AppImage.
-- `noridrive-X.Y.Z-windows-x86_64.zip`: complete self-contained WinUI app, worker and dependencies. Extract and start `noridrive-ui.exe`.
-- `noridrive-X.Y.Z-windows-x86_64.msix`: **unsigned** package with development identity. Signing/trust or a Microsoft Store identity is still required for normal installation/submission. The workflow does not publish to the Store.
-- `noridrive-X.Y.Z-windows-x86_64-cli.exe`: command-line executable, not the WinUI app.
+- `filenode-X.Y.Z-linux-x86_64.tar.gz`: Linux CLI, worker, Qt desktop frontend, docs and release notes. Requires Qt 6.4+, glibc compatible with Debian 12, D-Bus and a Secret Service. This is not a standalone AppImage.
+- `filenode-X.Y.Z-windows-x86_64.zip`: complete self-contained WinUI app, worker and dependencies. Extract and start `filenode-ui.exe`.
+- `filenode-X.Y.Z-windows-x86_64.msix`: **unsigned** package with development identity. Signing/trust or a Microsoft Store identity is still required for normal installation/submission. The workflow does not publish to the Store.
+- `filenode-X.Y.Z-windows-x86_64-cli.exe`: command-line executable, not the WinUI app.
 - `SHA256SUMS` and `BUILD-INFO.json`: checksums and provenance for all published files.
 
 Intermediate Actions artifacts expire after 90 days. Release assets remain attached to the GitHub release until removed.
@@ -29,7 +29,7 @@ Intermediate Actions artifacts expire after 90 days. Release assets remain attac
 
 `.github/workflows/pages.yml` deploys the static `website/` folder on website changes to main or manual dispatch. Pages must use **GitHub Actions** as its build source. The deployment uses `pages: write` and `id-token: write`; no separate hosting credential or external hosting service is used.
 
-The site is at [yannickdreher.github.io/NoriDrive](https://yannickdreher.github.io/NoriDrive/). It supports English/German, works under the project subpath and links to GitHub Releases. It retrieves public release assets to update download buttons; until a release exists or if the API is unavailable, those buttons open the release list. Language preference is stored locally. No analytics, external fonts, accounts or tracking cookies are included.
+The site is at [yannickdreher.github.io/FileNode](https://yannickdreher.github.io/FileNode/). It supports English/German, works under the project subpath and links to GitHub Releases. It retrieves public release assets to update download buttons; until a release exists or if the API is unavailable, those buttons open the release list. Language preference is stored locally. No analytics, external fonts, accounts or tracking cookies are included.
 
 ### Microsoft Store
 

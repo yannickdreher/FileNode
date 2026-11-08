@@ -2,44 +2,44 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "NoriDrive: Windows existing build (no Cargo required)",
+      "name": "FileNode: Windows existing build (no Cargo required)",
       "type": "coreclr", "request": "launch",
-      "program": "${workspaceFolder}/.dev/noridrive-preview/noridrive-ui.exe",
+      "program": "${workspaceFolder}/.dev/filenode-preview/filenode-ui.exe",
       "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings"],
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "noridrive: prepare debug profile"
+      "preLaunchTask": "filenode: prepare debug profile"
     },
     {
-      "name": "NoriDrive: Windows WinUI (Microsoft C# debugger)",
+      "name": "FileNode: Windows WinUI (Microsoft C# debugger)",
       "type": "coreclr", "request": "launch",
-      "program": "${workspaceFolder}/apps/windows/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64/noridrive-ui.exe",
+      "program": "${workspaceFolder}/apps/windows/bin/x64/Debug/net10.0-windows10.0.26100.0/win-x64/filenode-ui.exe",
       "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings"],
       "cwd": "${workspaceFolder}",
-      "preLaunchTask": "noridrive: Windows desktop"
+      "preLaunchTask": "filenode: Windows desktop"
     },
     {
-      "name": "NoriDrive: Rust core Windows (Microsoft debugger)",
+      "name": "FileNode: Rust core Windows (Microsoft debugger)",
       "type": "cppvsdbg", "request": "launch",
-      "program": "${workspaceFolder}/target/x86_64-pc-windows-msvc/debug/noridrive.exe",
+      "program": "${workspaceFolder}/target/x86_64-pc-windows-msvc/debug/filenode.exe",
       "args": ["--headless", "--once", "--config", "${workspaceFolder}/.dev/profile.toml"],
-      "cwd": "${workspaceFolder}", "preLaunchTask": "noridrive: Rust Windows",
+      "cwd": "${workspaceFolder}", "preLaunchTask": "filenode: Rust Windows",
       "environment": [{"name": "RUST_BACKTRACE", "value": "1"}]
     },
     {
-      "name": "NoriDrive: Linux Qt (GDB)",
+      "name": "FileNode: Linux Qt (GDB)",
       "type": "cppdbg", "request": "launch",
-      "program": "${workspaceFolder}/target/debug/noridrive-ui",
+      "program": "${workspaceFolder}/target/debug/filenode-ui",
       "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings", "--no-tray"],
       "cwd": "${workspaceFolder}", "MIMode": "gdb",
-      "preLaunchTask": "noridrive: Linux desktop"
+      "preLaunchTask": "filenode: Linux desktop"
     },
     {
-      "name": "NoriDrive: Rust core Linux (GDB)",
+      "name": "FileNode: Rust core Linux (GDB)",
       "type": "cppdbg", "request": "launch",
-      "program": "${workspaceFolder}/target/debug/noridrive",
+      "program": "${workspaceFolder}/target/debug/filenode",
       "args": ["--headless", "--once", "--config", "${workspaceFolder}/.dev/profile.toml"],
       "cwd": "${workspaceFolder}", "MIMode": "gdb",
-      "preLaunchTask": "noridrive: build"
+      "preLaunchTask": "filenode: build"
     }
   ]
 }

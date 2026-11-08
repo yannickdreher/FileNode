@@ -5,7 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Microsoft.UI.Dispatching;
 
-namespace Noritec.NoriDrive.Windows;
+namespace FileNode.Windows;
 
 // A private inherited pipe, never a TCP listener. Only Rust handles account secrets and sync.
 internal sealed class CoreClient : IAsyncDisposable
@@ -52,7 +52,7 @@ internal sealed class CoreClient : IAsyncDisposable
     }
     public void Start(string? corePath, string? profile)
     {
-        var start = new ProcessStartInfo(corePath ?? Path.Combine(AppContext.BaseDirectory, "noridrive-core.exe"))
+        var start = new ProcessStartInfo(corePath ?? Path.Combine(AppContext.BaseDirectory, "filenode-core.exe"))
         { UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8 };
         start.ArgumentList.Add("--service");
@@ -93,7 +93,7 @@ internal sealed class CoreClient : IAsyncDisposable
                     dispatcher.TryEnqueue(() => Receive(message));
                 }
             await worker.WaitForExitAsync();
-            if (!stopping) dispatcher.TryEnqueue(() => { Running = false; Ready = false; Error = "Rust worker exited. Restart NoriDrive to reconnect."; Changed?.Invoke(false); });
+            if (!stopping) dispatcher.TryEnqueue(() => { Running = false; Ready = false; Error = "Rust worker exited. Restart FileNode to reconnect."; Changed?.Invoke(false); });
         }
         catch (Exception error) { if (!stopping) dispatcher.TryEnqueue(() => { Error = error.Message; Running = false; Changed?.Invoke(false); }); }
     }

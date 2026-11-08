@@ -18,7 +18,7 @@ oauth_client_id = "example-public-client"
 oauth_redirect_port = 54823
 autostart = false
 EOF
-    "${DRIVE_UI:-${CARGO_TARGET_DIR:-target}/release/noridrive-ui}" \
-      --core "${DRIVE_CORE:-${CARGO_TARGET_DIR:-target}/release/noridrive}" \
+    "${DRIVE_UI:-${CARGO_TARGET_DIR:-target}/release/filenode-ui}" \
+      --core "${DRIVE_CORE:-${CARGO_TARGET_DIR:-target}/release/filenode}" \
       --config "$profile/profile.toml" --no-tray --self-test "artifacts/preview-$language" --self-test-account
 done
