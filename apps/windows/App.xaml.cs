@@ -13,7 +13,7 @@ public partial class App : Application
     }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetCurrentPackageFullName(ref uint length, nint name);
-    private static string? SelfTestDirectory => Option("--self-test");
+    internal static string? SelfTestDirectory => Option("--self-test");
     private static string selfTestStage = "initialize resources";
     public App()
     {

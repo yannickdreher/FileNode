@@ -7,6 +7,19 @@ using Microsoft.UI.Dispatching;
 
 namespace FileNode.Windows;
 
+internal sealed class FileActivity
+{
+    public required string Folder { get; init; }
+    public required string Path { get; set; }
+    public string State { get; set; } = "waiting";
+    public string Operation { get; set; } = "check";
+    public long Completed { get; set; }
+    public long Total { get; set; }
+    public DateTimeOffset Updated { get; set; } = DateTimeOffset.Now;
+    public bool Active => State == "transferring";
+    public double Percent => Total > 0 ? Math.Clamp(100d * Completed / Total, 0, 100) : 0;
+}
+
 // A private inherited pipe, never a TCP listener. Only Rust handles account secrets and sync.
 internal sealed class CoreClient : IAsyncDisposable
 {
@@ -20,7 +33,14 @@ internal sealed class CoreClient : IAsyncDisposable
     private bool connectAfterSave;
     private bool pendingInteractive;
     public JsonObject Config { get; private set; } = new();
-    public List<JsonObject> Activity { get; } = [];
+    public List<FileActivity> Activity { get; } = [];
+    public Dictionary<string, JsonObject> FolderStatuses { get; } = [];
+    public string AccountState { get; private set; } = "signed_out";
+    public bool Authenticated => AccountState == "signed_in";
+    public bool PowerPaused { get; private set; }
+    public string TrashUrl { get; private set; } = "";
+    public string AccountStatus => T("account." + AccountState);
+    public string FolderStatus(string folder) => T("folder." + (!Authenticated ? "not_connected" : !Running ? "paused" : PowerPaused ? "power_paused" : FolderStatuses.GetValueOrDefault(folder)?["state"]?.ToString() ?? "checking"));
     public bool Ready { get; private set; }
     public bool Running { get; private set; }
     public bool PowerAvailable { get; private set; }
@@ -97,7 +117,7 @@ internal sealed class CoreClient : IAsyncDisposable
         }
         catch (Exception error) { if (!stopping) dispatcher.TryEnqueue(() => { Error = error.Message; Running = false; Changed?.Invoke(false); }); }
     }
-    private void Receive(JsonObject message)
+    internal void Receive(JsonObject message)
     {
         var type = message["event"]?.ToString();
         bool configChanged = message["config"] is JsonObject;
@@ -105,7 +125,7 @@ internal sealed class CoreClient : IAsyncDisposable
         switch (type)
         {
             case "ready":
-                if (message["protocol"]?.GetValue<int>() != 3) { Error = "Incompatible Rust worker protocol"; break; }
+                if (message["protocol"]?.GetValue<int>() != 4) { Error = "Incompatible Rust worker protocol"; break; }
                 Ready = true;
                 break;
             case "configured":
@@ -120,16 +140,42 @@ internal sealed class CoreClient : IAsyncDisposable
                 }
                 break;
             case "running": Running = message["value"]!.GetValue<bool>(); StatusKey = Running ? "status.connecting" : "status.paused"; break;
+            case "account":
+                AccountState = message["state"]!.ToString(); TrashUrl = message["trash_url"]?.ToString() ?? TrashUrl;
+                if (AccountState == "signed_out") { Activity.Clear(); FolderStatuses.Clear(); TrashUrl = ""; }
+                if (AccountState == "failed") foreach (var pending in Activity.Where(item => item.Active || item.State == "retrying")) pending.State = "auth_required";
+                break;
+            case "folder":
+                var verifiedFolder = message["folder"]!.ToString(); FolderStatuses[verifiedFolder] = message.DeepClone().AsObject();
+                if (message["state"]!.ToString() == "current") foreach (var pending in Activity.Where(item => item.Folder == verifiedFolder && item.State is "waiting" or "checking" or "retrying" or "paused" or "auth_required")) { pending.State = "synced"; pending.Completed = pending.Total; pending.Updated = DateTimeOffset.Now; }
+                break;
+            case "renamed":
+                var movedFolder = message["folder"]!.ToString(); var from = message["from"]!.ToString(); var to = message["to"]!.ToString();
+                foreach (var moved in Activity.Where(item => item.Folder == movedFolder && (item.Path == from || item.Path.StartsWith(from + "/", StringComparison.Ordinal))).ToArray()) {
+                    var destination = to + moved.Path[from.Length..];
+                    Activity.RemoveAll(item => item != moved && item.Folder == movedFolder && item.Path == destination);
+                    moved.Path = destination; moved.State = "checking"; moved.Operation = "rename";
+                }
+                break;
+            case "file":
+                var folder = message["folder"]!.ToString(); var path = message["path"]!.ToString();
+                var item = Activity.Find(item => item.Folder == folder && item.Path == path);
+                if (item is null) { item = new() { Folder = folder, Path = path }; Activity.Insert(0, item); }
+                var state = message["state"]!.ToString();
+                if (state != item.State) item.Updated = DateTimeOffset.Now;
+                item.State = state; item.Operation = message["operation"]!.ToString();
+                item.Completed = message["completed"]!.GetValue<long>(); item.Total = message["total"]!.GetValue<long>();
+                if (item.Active) FolderStatuses[folder] = new() { ["state"] = "syncing" };
+                if (Activity.Count > 100) Activity.RemoveAt(100);
+                break;
             case "status": StatusKey = message["key"]!.ToString(); break;
             case "report":
                 Error = ""; var report = message["report"]!;
                 StatusKey = report["failed_folders"]?.GetValue<int>() > 0 ? "status.folder_error" : report["deferred"]!.GetValue<int>() > 0 ? "status.deferred" : report["blocked"]!.GetValue<int>() > 0 ? "status.deletions_blocked" : "status.current"; break;
-            case "activity":
-                message["time"] = DateTimeOffset.Now.ToString("g"); Activity.Insert(0, message);
-                if (Activity.Count > 100) Activity.RemoveAt(100); break;
             case "retry": case "error":
+                if (AccountState == "checking") AccountState = "failed";
                 pendingPassword = null; connectAfterSave = false; Error = message["details"]?.ToString() ?? "Unknown Rust worker error"; StatusKey = "status.retry"; break;
-            case "power": if (message["paused"]!.GetValue<bool>()) StatusKey = "status.power_paused"; break;
+            case "power": PowerPaused = message["paused"]!.GetValue<bool>(); if (PowerPaused) StatusKey = "status.power_paused"; break;
         }
         Changed?.Invoke(configChanged);
         // The host publishes initial power state while handling ready, before auto-connect.

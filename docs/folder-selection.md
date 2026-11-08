@@ -1,6 +1,6 @@
 # Selecting folders
 
-One profile connects one account and up to 64 local folders. In **Sync and recovery**, select **Add folder**. The selection is saved immediately and the generated server path appears below it. Pause synchronization before changing the list; use **Sign in** or **Resume** to start it afterwards.
+One profile connects one account and up to 64 local folders. In **Sync and backup**, select **Add folder**. The selection is saved immediately and the generated server path appears below it. Pause synchronization before changing the list; use **Sign in** or **Resume** to start it afterwards.
 
 Paths inside the user's home directory retain their relative structure:
 

@@ -26,8 +26,12 @@ ApplicationWindow {
                 ToolButton { text: "☰"; Accessible.name: statusWindow.t("tray.menu"); onClicked: statusMenu.open() }
                 ToolButton { text: "×"; Accessible.name: statusWindow.t("tray.hide"); onClicked: App.trayAvailable ? statusWindow.hide() : App.quit() }
             }
-            Label { text: App.config.username || statusWindow.t("account.not_connected"); elide: Text.ElideRight; Layout.fillWidth: true }
-            Label { text: App.status; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { text: App.authenticated ? App.config.username : statusWindow.t("account.not_connected"); elide: Text.ElideRight; Layout.fillWidth: true }
+            Label { text: App.accountStatus; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Repeater {
+                model: App.config.sync_folders || []
+                Label { text: { let states = App.folderStatuses; let running = App.running; let account = App.accountState; let power = App.powerPaused; return modelData.local_folder.split("/").pop() + " · " + App.folderStatus(modelData.local_folder) } font.pointSize: 9; elide: Text.ElideRight; Layout.fillWidth: true }
+            }
         }
     }
     Menu {
@@ -41,9 +45,9 @@ ApplicationWindow {
     }
     ColumnLayout {
         anchors.fill: parent; anchors.margins: 16; spacing: 12
-        Label { visible: !App.running && App.activities.length === 0; text: statusWindow.t("status.welcome"); font.pointSize: 20; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Label { visible: !App.running && App.activities.length === 0; text: statusWindow.t("status.setup_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Button { visible: !App.running && App.activities.length === 0; text: statusWindow.t("tray.settings"); onClicked: settings.showSettings() }
+        Label { visible: !App.running && App.activities.count === 0; text: statusWindow.t("status.welcome"); font.pointSize: 20; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { visible: !App.running && App.activities.count === 0; text: statusWindow.t("status.setup_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Button { visible: !App.running && App.activities.count === 0; text: statusWindow.t("tray.settings"); onClicked: settings.showSettings() }
         Label { visible: App.error.length > 0; text: statusWindow.t("error.summary"); wrapMode: Text.Wrap; Layout.fillWidth: true }
         Label { text: statusWindow.t("activity.recent"); font.bold: true }
         ListView {
@@ -51,14 +55,28 @@ ApplicationWindow {
             model: App.activities
             ScrollBar.vertical: ScrollBar {}
             delegate: ItemDelegate {
+                required property var activity
                 width: ListView.view.width
-                contentItem: ColumnLayout {
-                    Label { text: modelData.name; font.bold: true; Layout.fillWidth: true; elide: Text.ElideMiddle }
-                    Label { text: { let language = App.language; return App.formatMessage(modelData.message) } wrapMode: Text.Wrap; Layout.fillWidth: true }
-                    Label { text: new Date(modelData.time).toLocaleString(Qt.locale(App.language)); opacity: 0.65; font.pointSize: 9 }
+                contentItem: RowLayout {
+                    Image { source: "image://fileicon/" + encodeURIComponent(activity.folder + "/" + activity.path); sourceSize.width: 40; sourceSize.height: 40; Layout.preferredWidth: 40; Layout.preferredHeight: 40; fillMode: Image.PreserveAspectFit }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Label { text: activity.path.split("/").pop(); font.bold: true; Layout.fillWidth: true; elide: Text.ElideMiddle }
+                        Label {
+                            text: {
+                                let active = activity.state === "transferring"
+                                let state = active ? activity.operation === "upload" ? "uploading" : activity.operation === "download" ? "downloading" : "working" : activity.state === "synced" && activity.operation === "trash" ? "trashed" : activity.state
+                                let percent = activity.total > 0 ? Math.min(100, Math.floor(activity.completed * 100 / activity.total)) : 0
+                                return statusWindow.t("activity." + state) + (active && activity.total > 0 ? " · " + percent + "%" : "")
+                            }
+                            wrapMode: Text.Wrap; Layout.fillWidth: true
+                        }
+                        ProgressBar { visible: activity.state === "transferring"; indeterminate: activity.total === 0; from: 0; to: Math.max(1, activity.total); value: activity.completed; Layout.fillWidth: true }
+                        Label { text: activity.folder.split("/").pop() + " · " + new Date(activity.time).toLocaleTimeString(Qt.locale(App.language), "hh:mm"); opacity: 0.65; font.pointSize: 9 }
+                    }
                 }
             }
-            Label { visible: App.activities.length === 0; text: statusWindow.t("activity.empty"); width: parent.width; wrapMode: Text.Wrap }
+            Label { visible: App.activities.count === 0; text: statusWindow.t("activity.empty"); width: parent.width; wrapMode: Text.Wrap }
         }
     }
     footer: ToolBar {
@@ -66,7 +84,7 @@ ApplicationWindow {
             anchors.fill: parent; anchors.margins: 8
             ToolButton { text: statusWindow.t("action.open"); Layout.fillWidth: true; onClicked: App.openFolder() }
             ToolButton { text: statusWindow.t("action.online"); Layout.fillWidth: true; onClicked: App.openOnline() }
-            ToolButton { text: statusWindow.t("action.recovery"); Layout.fillWidth: true; onClicked: App.openRecovery() }
+            ToolButton { text: statusWindow.t("action.trash"); Layout.fillWidth: true; onClicked: App.openTrash() }
         }
     }
 
@@ -112,6 +130,7 @@ ApplicationWindow {
                         ColumnLayout {
                             spacing: 16
                             Label { text: statusWindow.t("settings.sync_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Button { text: statusWindow.t("action.resume"); visible: App.authenticated && !App.running; onClicked: App.start() }
                             Label { text: statusWindow.t("settings.folders"); font.pointSize: 16 }
                             Label { text: statusWindow.t("settings.folders_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { visible: (App.config.sync_folders || []).length === 0; text: statusWindow.t("settings.no_folders"); wrapMode: Text.Wrap; Layout.fillWidth: true }
@@ -125,10 +144,10 @@ ApplicationWindow {
                                         anchors.fill: parent
                                         Label { text: modelData.local_folder; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
                                         Label { text: statusWindow.t("settings.folder_target") + ": /" + modelData.remote_path; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        Label { text: { let states = App.folderStatuses; let running = App.running; let account = App.accountState; let power = App.powerPaused; return App.folderStatus(modelData.local_folder) } wrapMode: Text.Wrap; Layout.fillWidth: true }
                                         Flow {
                                             Layout.fillWidth: true; spacing: 8
                                             Button { text: statusWindow.t("action.open"); onClicked: App.openPath(modelData.local_folder) }
-                                            Button { text: statusWindow.t("action.recovery"); onClicked: App.openPath(modelData.local_folder + "/.filenode/history") }
                                             Button { text: statusWindow.t("settings.remove_folder"); enabled: !App.running; onClicked: { let next = App.config.sync_folders.slice(); next.splice(index, 1); App.apply({sync_folders: next}) } }
                                         }
                                     }
@@ -166,6 +185,7 @@ ApplicationWindow {
                         }
                         ColumnLayout {
                             spacing: 12
+                            Label { text: App.accountStatus; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
                             Label { text: statusWindow.t("settings.server") }
                             TextField { id: server; text: App.config.server || ""; enabled: !App.running; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.web") }
@@ -207,7 +227,7 @@ ApplicationWindow {
                     }
                     RowLayout {
                         Button { text: statusWindow.t("settings.save"); visible: pages.currentIndex !== 1 && pages.currentIndex !== 3; enabled: App.ready; onClicked: settings.save(false) }
-                        Button { objectName: "accountSignInButton"; text: statusWindow.t(App.running ? "action.pause" : "action.signin"); visible: pages.currentIndex === 1; enabled: App.ready; highlighted: true; onClicked: App.running ? App.pause() : settings.save(true) }
+                        Button { objectName: "accountSignInButton"; text: statusWindow.t(App.accountState === "checking" ? "account.checking" : App.authenticated ? "account.signin_again" : "action.signin"); visible: pages.currentIndex === 1 && !(App.authenticated && App.running); enabled: App.ready && !App.running && App.accountState !== "checking"; highlighted: true; onClicked: settings.save(true) }
                     }
                     Label { visible: App.running; text: statusWindow.t("settings.pause_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                     Label { visible: App.error.length > 0; text: statusWindow.t("error.details") + "\n" + App.error; wrapMode: Text.Wrap; Layout.fillWidth: true; font.family: "monospace" }

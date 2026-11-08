@@ -32,7 +32,10 @@ pub struct SyncGroup {
 
 impl SyncGroup {
     pub fn new(config: &Config) -> Result<Self> {
-        config.validate()?;
+        config.validate_account()?;
+        if !config.sync_folders.as_ref().is_some_and(Vec::is_empty) {
+            config.validate_folders()?;
+        }
         Ok(Self {
             folders: config
                 .folder_configs()?
@@ -84,6 +87,10 @@ impl SyncGroup {
             {
                 continue;
             }
+            let _folder_scope = crate::activity::Scope::folder(
+                folder.config.local_folder.to_string_lossy().into_owned(),
+            );
+            crate::activity::folder_status("checking", 0, String::new());
             let result = (|| {
                 // Never recreate a missing selected root or its private state directory.
                 folder.config.validate()?;
@@ -114,6 +121,19 @@ impl SyncGroup {
                     folder.backoff = 5;
                     folder.deferred = report.deferred;
                     folder.blocked = report.blocked;
+                    crate::activity::folder_status(
+                        if report.blocked > 0 {
+                            "blocked"
+                        } else if report.deferred > 0 {
+                            "waiting"
+                        } else if report.needs_rescan {
+                            "checking"
+                        } else {
+                            "current"
+                        },
+                        0,
+                        String::new(),
+                    );
                     let delay = if report.needs_rescan {
                         0
                     } else if report.deferred > 0 {
@@ -137,6 +157,11 @@ impl SyncGroup {
                         return Err(error);
                     }
                     folder.failed = true;
+                    crate::activity::folder_status(
+                        "retrying",
+                        folder.backoff,
+                        format!("{error:#}"),
+                    );
                     folder.due = Instant::now() + Duration::from_secs(folder.backoff);
                     folder.backoff = (folder.backoff * 2).min(300);
                     if let Some(scanner) = &mut folder.scanner {

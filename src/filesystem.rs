@@ -10,7 +10,7 @@ use std::{
 use unicode_normalization::UnicodeNormalization;
 
 pub const PRIVATE_DIR: &str = ".filenode";
-pub const REMOTE_TRASH: &str = ".filenode-trash";
+pub const REMOTE_HISTORY: &str = ".filenode-history";
 
 pub fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
@@ -40,8 +40,16 @@ pub fn folded(path: &str) -> String {
 }
 
 pub fn ignored(path: &str) -> bool {
-    path.split('/')
-        .any(|part| [PRIVATE_DIR, REMOTE_TRASH, ".git"].contains(&part.to_lowercase().as_str()))
+    path.split('/').any(|part| {
+        [
+            PRIVATE_DIR,
+            REMOTE_HISTORY,
+            ".filenode-trash",
+            ".trash",
+            ".git",
+        ]
+        .contains(&part.to_lowercase().as_str())
+    })
 }
 
 pub fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {

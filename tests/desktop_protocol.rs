@@ -50,7 +50,7 @@ fn worker_versions_protocol_validates_settings_and_applies_power_policy() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(events[0]["event"], "ready");
-    assert_eq!(events[0]["protocol"], 3);
+    assert_eq!(events[0]["protocol"], 4);
     assert!(events[0]["config"].get("auto_connect").is_none());
     assert!(events[0]["config"].get("remote_folder").is_none());
     assert!(events[0]["config"].get("local_folder").is_none());

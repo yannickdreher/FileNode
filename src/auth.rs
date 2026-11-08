@@ -83,6 +83,9 @@ impl Authentication {
     }
     pub fn observe(&self, status: StatusCode) -> Result<()> {
         if status == StatusCode::UNAUTHORIZED {
+            if matches!(self, Self::Basic { .. }) {
+                return Err(SignInRequired.into());
+            }
             if let Self::OAuth(session) = self {
                 let mut session = session
                     .lock()

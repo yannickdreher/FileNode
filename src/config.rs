@@ -82,7 +82,7 @@ impl Default for Config {
             file_settle_seconds: 2,
             pause_on_power_saver: true,
             autostart: false,
-            propagate_deletes: false,
+            propagate_deletes: true,
             max_delete_count: 20,
             max_delete_percent: 25,
             max_file_bytes: 1024 * 1024 * 1024,
@@ -95,6 +95,10 @@ impl Default for Config {
 
 impl Config {
     pub fn validate(&self) -> Result<()> {
+        self.validate_account()?;
+        self.validate_folders()
+    }
+    pub fn validate_account(&self) -> Result<()> {
         let url = Url::parse(&self.server).context("Invalid server URL")?;
         if url.scheme() != "https" || url.host_str().is_none() {
             bail!("The server must use HTTPS");
@@ -126,7 +130,6 @@ impl Config {
         {
             bail!("Web client URL must use HTTPS without embedded credentials");
         }
-        self.validate_folders()?;
         if self.interval_seconds < 5 || self.interval_seconds > 86400 {
             bail!("Check interval must be between 5 and 86400 seconds");
         }

@@ -12,10 +12,11 @@ Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regel
 
 ## Funktionen
 
+- Bestätigte Anmeldung getrennt vom Sync-Status jedes Ordners. Pro Datei eine Aktivitätszeile mit echtem Übertragungsfortschritt sowie Erfolgs-/Wiederholungsstatus.
 - Mehrere lokale Ordner pro Konto, automatische Serverpfade relativ zum Benutzerverzeichnis und getrennte Zustände/Wiederholungen je Ordner.
 - Vollständige lokale Dateien, bidirektionaler Abgleich, SHA-256-Inhaltsvergleich, SQLite-Dreiwege-Abgleich und dauerhaftes Journal.
 - Bei Konflikten bleiben beide Fassungen erhalten. Remote-Umbenennungen nutzen stabile IDs; eindeutige lokale Dateiumbenennungen erhalten die Server-Identität.
-- Löschweitergabe erst nach Aktivierung, mit Schutz vor Massenlöschungen. Vorherige Fassungen liegen lokal in `.filenode/history` und remote in `.filenode-trash`. Kein `FileNode/destroy`.
+- Löschungen werden über den gemeinsamen Server-Papierkorb abgeglichen, kompatibel mit Bulwark und mit Schutz vor Massenlöschungen. Kein `FileNode/destroy`. Siehe [Papierkorb-Verhalten](docs/deletions.md).
 - Native Dateisystem-Ereignisse unter Windows und Linux, Bündelung von Änderungen, Hash-Cache, regelmäßige vollständige Kontrolle und JMAP `FileNode/changes`.
 - Upload und Download getrennt in KiB/s begrenzen, auch während des Betriebs. Null bedeutet unbegrenzt.
 - Gesperrte Dateien werden zurückgestellt; geänderte Dateien müssen über mehrere Beobachtungen stabil bleiben. Andere oberste Dateigruppen können weiter synchronisieren.
@@ -46,7 +47,7 @@ Pull Requests führen Linux- und native Windows-Prüfungen in GitHub Actions aus
 
 ## Verbinden
 
-Unter **Synchronisation und Wiederherstellung** die lokalen Ordner hinzufügen. Unter **Konto** Server und Benutzername eingeben. Vorgaben sind `https://jmap.example.com` für JMAP und `https://mail.example.com` für den Webclient. Als Anmeldemethode **Browser / Single Sign-on** für OAuth Authorization Code mit PKCE oder **App-Passwort** auswählen und anschließend **Anmelden** drücken. Die Löschweitergabe zunächst ausgeschaltet lassen. Die [Browser-Anmeldedokumentation](docs/browser-authentication.md) beschreibt Server-Voraussetzungen und externe OIDC-Anbieter.
+Unter **Synchronisation** die lokalen Ordner hinzufügen. Unter **Konto** Server und Benutzername eingeben. Vorgaben sind `https://jmap.example.com` für JMAP und `https://mail.example.com` für den Webclient. Als Anmeldemethode **Browser / Single Sign-on** für OAuth Authorization Code mit PKCE oder **App-Passwort** auswählen und anschließend **Anmelden** drücken. Vor dem Verbinden eines Testordners die Einstellung zur Löschweitergabe prüfen. Die [Browser-Anmeldedokumentation](docs/browser-authentication.md) beschreibt Server-Voraussetzungen und externe OIDC-Anbieter.
 
 **Anmelden** speichert die Eingaben vor der Authentifizierung. Serverpfade entstehen relativ zum Benutzerverzeichnis: `C:\Users\Yannick\Desktop` wird zu `/Desktop`, `C:\Users\Yannick\Documents\Büro` zu `/Documents/Büro`. Außerhalb des Benutzerverzeichnisses wird der letzte Ordnername verwendet. Überlappende lokale oder serverseitige Auswahlen werden abgelehnt. Vor dem Hinzufügen oder Beenden eines Ordners pausieren. **Synchronisation beenden** erhält lokale und serverseitige Dateien. Siehe [Ordnerauswahl](docs/folder-selection.md).
 
@@ -68,6 +69,6 @@ Noch offen sind Dateien bei Bedarf, Explorer-Platzhalter, Blockübertragungen, R
 
 Der komplette Namensraum wird weiterhin eingelesen; der Cache spart Inhaltszugriffe. Dateisperren und eine Wartezeit reduzieren Rennen, garantieren aber nicht für jedes Programm das Ende eines Schreibvorgangs. Unix-Sperren sind kooperativ. Bandbreitengrenzen betreffen Nutzdaten, nicht TLS-/HTTP-Overhead und Socket-Puffer. Weitere Grenzen stehen in der [Architektur](docs/architecture.md).
 
-`.filenode` nicht zur Reparatur löschen: Hier liegen Baseline, Journal, Teilübertragungen und Wiederherstellungskopien. Vor dem Zurückkopieren alter Fassungen den Abgleich pausieren. Lokale Kopien liegen in `.filenode/history`, Remote-Kopien in `.filenode-trash`, erreichbar etwa über Bulwark. Die Ablagen haben keine automatische Aufbewahrungsfrist und verbrauchen Speicher/Quota. Unabhängige Backups bleiben nötig.
+`.filenode` nicht zur Reparatur löschen: Hier liegen Baseline, Journal, Teilübertragungen und Wiederherstellungskopien. Vor dem Zurückkopieren alter Fassungen den Abgleich pausieren. Der Papierkorb verwendet den Server-Papierkorb. Davon getrennte interne Kopien alter Fassungen liegen lokal in `.filenode/history` und remote in `.filenode-history`. Die Ablagen haben keine automatische Aufbewahrungsfrist und verbrauchen Speicher/Quota. Unabhängige Backups bleiben nötig.
 
 Adapter berücksichtigen Stalwart 0.16 `nodeType`/`type` und das neuere `@type`/`mediaType`-Schema. Lokale HTTP-Tests prüfen beide; Live-Stalwart-Abnahme, Stromausfälle und große Bestände auf mehreren Geräten stehen weiterhin aus.

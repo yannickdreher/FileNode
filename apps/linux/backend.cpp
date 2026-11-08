@@ -34,6 +34,7 @@ Backend::Backend(QString core, QString profile, bool noTray, bool background, QO
     connect(&m_core, &QProcess::readyReadStandardOutput, this, &Backend::receive);
     connect(&m_core, &QProcess::errorOccurred, this, [this] { m_error = m_core.errorString(); emit changed(); });
     connect(&m_core, &QProcess::finished, this, [this](int code, QProcess::ExitStatus) {
+        m_ready = false; if (!m_quitting) m_account = "failed";
         m_running = false; if (!m_quitting && code != 0) m_error = QString("Rust service exited with code %1").arg(code); emit changed();
         if (m_quitting) qApp->quit();
     });
@@ -80,7 +81,7 @@ void Backend::receive() {
             m_pendingPassword.fill(QChar(0)); m_pendingPassword.clear();
         }
         if (type == "ready") {
-            if (event.value("protocol").toInt() != 3) { m_error = "Incompatible Rust worker protocol"; emit changed(); continue; }
+            if (event.value("protocol").toInt() != 4) { m_error = "Incompatible Rust worker protocol"; emit changed(); continue; }
             m_ready = true; publishPower();
             if (!m_config.value("username").toString().isEmpty()) start();
             if (m_background && m_trayAvailable && !m_config.value("username").toString().isEmpty()) emit hideStatus();
@@ -92,13 +93,20 @@ void Backend::receive() {
         else if (type == "report") {
             auto report = event.value("report").toObject(); m_error.clear();
             m_status = report.value("failed_folders").toInt() > 0 ? "status.folder_error" : report.value("deferred").toInt() > 0 ? "status.deferred" : report.value("blocked").toInt() > 0 ? "status.deletions_blocked" : "status.current";
-        } else if (type == "activity") {
-            auto message = event.value("message").toObject().toVariantMap();
-            QString path; for (const auto &item : message.value("arguments").toList()) { auto pair = item.toList(); if (pair.size() == 2 && (pair[0] == "path" || pair[0] == "to")) path = pair[1].toString(); }
-            m_activity.prepend(QVariantMap {{"message",message},{"name",QFileInfo(path).fileName()},{"time",QDateTime::currentDateTime().toString(Qt::ISODate)}});
-            while (m_activity.size() > 100) m_activity.removeLast();
-        } else if (type == "error" || type == "retry") { m_connectAfterSave = false; m_pendingPassword.fill(QChar(0)); m_pendingPassword.clear(); m_error = event.value("details").toString(); m_status = "status.retry"; }
-        else if (type == "power" && event.value("paused").toBool()) m_status = "status.power_paused";
+        } else if (type == "account") {
+            m_account = event.value("state").toString();
+            if (event.contains("trash_url")) m_trashUrl = event.value("trash_url").toString();
+            if (m_account == "signed_out") { m_activity.clear(); m_folders.clear(); m_trashUrl.clear(); }
+            if (m_account == "failed") m_activity.requireSignIn();
+        } else if (type == "folder") { m_folders[event.value("folder").toString()] = event.toVariantMap(); if (event.value("state") == "current") m_activity.verifiedFolder(event.value("folder").toString()); }
+        else if (type == "renamed") m_activity.renamed(event.value("folder").toString(), event.value("from").toString(), event.value("to").toString());
+        else if (type == "file") {
+            m_activity.upsert(event.toVariantMap());
+            if (event.value("state") == "transferring") m_folders[event.value("folder").toString()] = QVariantMap{{"state","syncing"}};
+        } else if (type == "error" || type == "retry") {
+            if (m_account == "checking") m_account = "failed";
+            m_connectAfterSave = false; m_pendingPassword.fill(QChar(0)); m_pendingPassword.clear(); m_error = event.value("details").toString(); m_status = "status.retry";
+        } else if (type == "power") { m_powerPaused = event.value("paused").toBool(); if (m_powerPaused) m_status = "status.power_paused"; }
         updateTray(); emit changed();
     }
 }
@@ -124,10 +132,13 @@ void Backend::openOnline() {
     QUrl url(m_config.value("web_url").toString());
     if (url.scheme() == "https" && url.userInfo().isEmpty()) QDesktopServices::openUrl(url);
 }
-void Backend::openRecovery() {
-    const auto folders = m_config.value("sync_folders").toList();
-    if (folders.size() == 1) openPath(QDir(folders.first().toMap().value("local_folder").toString()).filePath(".filenode/history"));
-    else emit showFolders();
+void Backend::openTrash() {
+    const QUrl url(m_trashUrl.isEmpty() ? m_config.value("web_url").toString() : m_trashUrl);
+    if (url.scheme() == "https" && url.userInfo().isEmpty()) QDesktopServices::openUrl(url);
+}
+QString Backend::folderStatus(const QString &folder) const {
+    const auto state = !authenticated() ? "not_connected" : !m_running ? "paused" : m_powerPaused ? "power_paused" : m_folders.value(folder).toMap().value("state", "checking").toString();
+    return translate("folder." + QString(state));
 }
 void Backend::quit() { m_quitting = true; send({{"command","quit"}}); if (m_core.state() == QProcess::NotRunning) qApp->quit(); }
 QPoint Backend::popupPosition(int width, int height) const {

@@ -87,6 +87,9 @@ pub fn sync_with_scanner<R: Remote>(
     let mut tree = jmap::scoped_tree(&snapshot, root_id.as_deref())?;
     let mut base = store.baselines()?;
     let deferred = scanner.deferred_roots();
+    for path in scanner.deferred_paths().take(100) {
+        crate::activity::notice(path, "check", "waiting");
+    }
     let allowed = |path: &str| {
         !deferred
             .iter()
@@ -119,7 +122,7 @@ pub fn sync_with_scanner<R: Remote>(
     if !deferred.is_empty() {
         log(Message::new("log.deferred").with("count", deferred.len()));
     }
-    let mut trash_id: Option<String> = None;
+    let mut history_id: Option<String> = None;
     for action in actions {
         crate::runtime::check()?;
         if cancel.load(Ordering::Relaxed) {
@@ -128,6 +131,7 @@ pub fn sync_with_scanner<R: Remote>(
         let path = action.path().to_owned();
         let expected = local.get(&path);
         if matches!(action, Action::Blocked(_)) {
+            crate::activity::notice(&path, "trash", "blocked");
             report.blocked += 1;
             continue;
         }
@@ -153,11 +157,27 @@ pub fn sync_with_scanner<R: Remote>(
             let target = disk::checked_path(&config.local_folder, &path)?;
             if disk::open_snapshot(&target).is_err() {
                 report.deferred += 1;
+                crate::activity::notice(&path, "check", "waiting");
                 log(Message::new("log.busy").with("path", &path));
                 continue;
             }
         }
         let op = store.begin(&action)?;
+        let operation = match &action {
+            Action::Upload(_) => "upload",
+            Action::Download(_) | Action::Reconcile(_) => "download",
+            Action::DeleteLocal(_) | Action::DeleteRemote(_) => "trash",
+            Action::Conflict(_) => "compare",
+            _ => "folder",
+        };
+        let bytes = if operation == "upload" {
+            expected.map_or(0, |entry| entry.size)
+        } else if operation == "download" {
+            tree.get(&path).map_or(0, |entry| entry.size)
+        } else {
+            0
+        };
+        let mut activity = crate::activity::FileActivity::begin(&path, operation, bytes);
         let completed = match &action {
             Action::Upload(_) => "log.uploaded",
             Action::Download(_) => "log.downloaded",
@@ -223,12 +243,12 @@ pub fn sync_with_scanner<R: Remote>(
                 )?;
                 let (parent, name) = parent_and_name(&tree, root_id.as_deref(), &path)?;
                 let node = if let Some(previous) = tree.get(&path) {
-                    let trash = ensure_trash(
+                    let trash = ensure_version_history(
                         remote,
                         store,
                         root_id.as_deref(),
                         &snapshot.nodes,
-                        &mut trash_id,
+                        &mut history_id,
                         &mut snapshot.state,
                     )?;
                     let backup_name = format!(
@@ -308,6 +328,7 @@ pub fn sync_with_scanner<R: Remote>(
                 report.conflicts += 1;
                 report.needs_rescan = true;
                 store.done(&op)?;
+                activity.finish("warning");
                 return Ok(report);
             }
             Action::DeleteLocal(_) => {
@@ -323,23 +344,44 @@ pub fn sync_with_scanner<R: Remote>(
             }
             Action::DeleteRemote(_) => {
                 disk::verify_local(&config.local_folder, &path, None, config.max_file_bytes)?;
-                let trash = ensure_trash(
-                    remote,
-                    store,
-                    root_id.as_deref(),
-                    &snapshot.nodes,
-                    &mut trash_id,
+                let trash = ensure_server_trash(remote, &mut snapshot)?;
+                let node = &tree[&path];
+                // Bulwark-compatible batch names retain the original parent for Restore.
+                let parent = node.parent_id.as_deref().unwrap_or("");
+                if !parent
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+                {
+                    bail!("Parent ID cannot be represented in the interoperable trash format");
+                }
+                let newest = snapshot
+                    .nodes
+                    .iter()
+                    .filter(|entry| entry.parent_id.as_deref() == Some(&trash))
+                    .filter_map(|entry| entry.name.split_once('~')?.0.parse::<i64>().ok())
+                    .max()
+                    .unwrap_or(0);
+                let timestamp = chrono::Utc::now()
+                    .timestamp_millis()
+                    .max(newest.saturating_add(1));
+                let batch = remote.create(
+                    &format!("{timestamp}~{parent}"),
+                    Some(&trash),
+                    Kind::Directory,
+                    None,
+                    0,
                     &mut snapshot.state,
                 )?;
-                let node = &tree[&path];
-                let name = format!(
-                    "{}-{}",
-                    uuid::Uuid::new_v4().simple(),
-                    node.name.chars().take(100).collect::<String>()
-                );
-                remote.update(node, &name, Some(&trash), None, &mut snapshot.state)?;
-                store.forget(&path)?;
-                tree.remove(&path);
+                let batch_id = batch.id.clone();
+                snapshot.nodes.push(batch);
+                let moved =
+                    remote.update(node, &node.name, Some(&batch_id), None, &mut snapshot.state)?;
+                if let Some(previous) = snapshot.nodes.iter_mut().find(|entry| entry.id == moved.id)
+                {
+                    *previous = moved;
+                }
+                store.forget_tree(&path)?;
+                tree.retain(|entry, _| entry != &path && !entry.starts_with(&format!("{path}/")));
                 report.recycled += 1;
             }
             Action::MoveLocal { .. }
@@ -349,6 +391,7 @@ pub fn sync_with_scanner<R: Remote>(
             | Action::Blocked(_) => unreachable!(),
         }
         store.done(&op)?;
+        activity.finish("synced");
         log(Message::new(completed).with("path", &path));
     }
     Ok(report)
@@ -420,7 +463,43 @@ fn check_state<R: Remote>(remote: &R, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn ensure_trash<R: Remote>(
+fn ensure_server_trash<R: Remote>(remote: &mut R, snapshot: &mut Snapshot) -> Result<String> {
+    let matches: Vec<_> = snapshot
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.role.as_deref() == Some("trash")
+                || (node.parent_id.is_none() && node.name == ".Trash")
+        })
+        .collect();
+    match matches.as_slice() {
+        [node] if node.kind == Kind::Directory => {
+            check_state(remote, &snapshot.state)?;
+            Ok(node.id.clone())
+        }
+        [] => {
+            let parent = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.kind == Kind::Directory && node.role.as_deref() == Some("root"))
+                .map(|node| node.id.clone());
+            let node = remote.create_trash(parent.as_deref(), &mut snapshot.state)?;
+            if node.kind != Kind::Directory
+                || (node.role.as_deref() != Some("trash")
+                    && !(node.parent_id.is_none() && node.name == ".Trash"))
+            {
+                bail!("Server did not create a valid trash directory");
+            }
+            let id = node.id.clone();
+            snapshot.nodes.push(node);
+            Ok(id)
+        }
+        _ => bail!("Server trash role is ambiguous or invalid"),
+    }
+}
+
+// Private overwritten-version storage is distinct from the account's trash role.
+fn ensure_version_history<R: Remote>(
     remote: &mut R,
     store: &Store,
     root: Option<&str>,
@@ -434,7 +513,7 @@ fn ensure_trash<R: Remote>(
     }
     let matches: Vec<_> = nodes
         .iter()
-        .filter(|n| n.parent_id.as_deref() == root && disk::folded(&n.name) == disk::REMOTE_TRASH)
+        .filter(|n| n.parent_id.as_deref() == root && disk::folded(&n.name) == disk::REMOTE_HISTORY)
         .collect();
     let id = match matches.as_slice() {
         [node] if node.kind == Kind::Directory => {
@@ -443,12 +522,12 @@ fn ensure_trash<R: Remote>(
         }
         [] => {
             remote
-                .create(disk::REMOTE_TRASH, root, Kind::Directory, None, 0, state)?
+                .create(disk::REMOTE_HISTORY, root, Kind::Directory, None, 0, state)?
                 .id
         }
         _ => bail!("Invalid remote recovery storage"),
     };
-    store.set_meta("trash_id", &id)?;
+    store.set_meta("history_id", &id)?;
     *cached = Some(id.clone());
     Ok(id)
 }
@@ -512,6 +591,7 @@ fn reconcile_rename<R: Remote>(
                 log(Message::new("log.remote_rename")
                     .with("from", old)
                     .with("to", new));
+                crate::activity::renamed(old, new);
                 return Ok(true);
             }
         }
@@ -559,6 +639,7 @@ fn reconcile_rename<R: Remote>(
         log(Message::new("log.local_rename")
             .with("from", old)
             .with("to", new));
+        crate::activity::renamed(old, new);
         return Ok(true);
     }
     Ok(false)

@@ -12,10 +12,11 @@ Both frontends share `locales/en.json` and `locales/de.json`, the configuration 
 
 ## Features
 
+- Verified account sign-in is separate from each folder's sync status. Each file has one activity row with streamed byte progress and completion/retry states.
 - Multiple local folders per account, with automatic home-relative server paths and independent retry/state for each folder.
 - Bidirectional full-file synchronization, SHA-256 comparison, SQLite three-way baselines and a durable operation journal.
 - Both copies survive conflicts; stable remote IDs support remote renames, and unambiguous local file renames preserve server identity.
-- Deletions are opt-in, with mass-deletion limits. Old local versions go to `.filenode/history`; remote versions go to `.filenode-trash`. Remote `FileNode/destroy` is never called.
+- Bidirectional deletions use the server trash, interoperating with Bulwark and retaining mass-deletion limits. Remote `FileNode/destroy` is never called. [Trash behavior](docs/deletions.md).
 - Native file events (`notify`: inotify on Linux, ReadDirectoryChangesW on Windows), debouncing, event-invalidated content hashes, periodic full verification and JMAP `FileNode/changes`.
 - Separate upload/download payload caps in KiB/s, editable while running. Zero disables the cap.
 - Busy files are deferred; changed files must settle across observations before upload. Unrelated top-level file groups can still sync.
@@ -46,7 +47,7 @@ Pull requests run Linux and native Windows checks on GitHub Actions. Merges into
 
 ## Connect
 
-In **Sync and recovery**, add the local folders to synchronize. In **Account**, configure the JMAP server and username. Defaults are `https://jmap.example.com` for JMAP and `https://mail.example.com` for the web client. Choose **Browser / single sign-on** for OAuth Authorization Code + PKCE or **App password**, then select **Sign in**. Leave deletion propagation disabled initially. See [browser authentication](docs/browser-authentication.md) for server prerequisites and external OIDC providers.
+In **Sync and backup**, add the local folders to synchronize. In **Account**, configure the JMAP server and username. Defaults are `https://jmap.example.com` for JMAP and `https://mail.example.com` for the web client. Choose **Browser / single sign-on** for OAuth Authorization Code + PKCE or **App password**, then select **Sign in**. Check the deletion propagation setting before connecting a test folder. See [browser authentication](docs/browser-authentication.md) for server prerequisites and external OIDC providers.
 
 **Sign in** saves the entered settings before authentication. Server paths are generated relative to your home directory: `C:\Users\Yannick\Desktop` maps to `/Desktop`, and `C:\Users\Yannick\Documents\Büro` maps to `/Documents/Büro`. Outside the home directory, the selected folder's final name is used. Overlapping local or remote selections are rejected. Pause before adding or stopping folders. **Stop sync** keeps both local and remote files. See [folder selection](docs/folder-selection.md).
 
@@ -68,7 +69,7 @@ This is a full-file preview, not a complete OneDrive replacement. Files on deman
 
 The complete namespace is still enumerated; cached hashes reduce content reads, not directory-walk complexity. Watcher loss, manual checks, reconnects and periodic verification rehash contents. Settling and locks reduce races but cannot prove that every application has finished writing. Unix locks are advisory. Payload caps exclude TLS/HTTP overhead and socket buffering. [Architecture](docs/architecture.md) describes these boundaries and acceptance work.
 
-Never remove `.filenode` to repair a profile: it holds the baseline, journal, transfers and recovery history. Pause sync before restoring copies. Local recovery lives under `.filenode/history`; remote recovery under `.filenode-trash` can be accessed through a JMAP client such as Bulwark. Recovery has no automatic retention policy and consumes space/quota. Maintain independent backups.
+Never remove `.filenode` to repair a profile: it holds the baseline, journal, transfers and recovery history. Pause sync before restoring copies. The Recycle bin uses the server trash. Separate internal overwrite protection uses `.filenode/history` locally and `.filenode-history` remotely; it has no automatic retention policy and consumes space/quota. Maintain independent backups.
 
 Adapters cover Stalwart 0.16 `nodeType`/`type` and the newer `@type`/`mediaType` FileNode schema. Loopback tests verify both; live Stalwart compatibility, interrupted-power behavior and large multi-device workloads still need acceptance testing.
 

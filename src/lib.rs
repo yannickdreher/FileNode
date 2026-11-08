@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod auth;
 pub mod config;
 pub mod engine;

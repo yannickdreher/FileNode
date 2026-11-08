@@ -396,6 +396,16 @@ impl Server {
 }
 
 impl Remote for Server {
+    fn create_trash(&mut self, parent: Option<&str>, state: &mut String) -> Result<Node> {
+        let mut node = self.create(".Trash", parent, Kind::Directory, None, 0, state)?;
+        node.role = Some("trash".into());
+        self.nodes
+            .iter_mut()
+            .find(|item| item.id == node.id)
+            .unwrap()
+            .role = node.role.clone();
+        Ok(node)
+    }
     fn account_id(&self) -> &str {
         "account"
     }
@@ -440,6 +450,7 @@ impl Remote for Server {
             blob_id: blob.map(str::to_owned),
             kind,
             size,
+            role: None,
         };
         self.nodes.push(node.clone());
         self.revision += 1;
@@ -707,26 +718,143 @@ fn overwrite_keeps_remote_recovery_copy() {
 }
 
 #[test]
-fn local_delete_soft_moves_remote_to_recovery_folder() {
+fn local_delete_uses_the_native_server_trash_without_a_download_loop_and_restores() {
     let mut f = Fixture::new();
     f.local("a.txt", "one");
     f.run().unwrap();
     let id = f.server.node("a.txt").id;
     fs::remove_file(f.folder.path().join("a.txt")).unwrap();
     assert_eq!(f.run().unwrap().recycled, 1);
-    let trash = f.server.node(filesystem::REMOTE_TRASH).id;
+    let trash = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| node.role.as_deref() == Some("trash"))
+        .unwrap()
+        .id
+        .clone();
+    let moved = f.server.nodes.iter().find(|node| node.id == id).unwrap();
+    let batch = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| Some(&node.id) == moved.parent_id.as_ref())
+        .unwrap();
+    assert_eq!(batch.parent_id.as_ref(), Some(&trash));
+    assert!(batch.name.ends_with(&format!(
+        "~{}",
+        f.server.node(f.config.remote_folder_name().unwrap()).id
+    )));
+    assert_eq!(moved.name, "a.txt");
+    f.run().unwrap();
+    assert!(!f.folder.path().join("a.txt").exists());
+    let root = f.server.node(f.config.remote_folder_name().unwrap()).id;
+    let node = f
+        .server
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == id)
+        .unwrap();
+    node.parent_id = Some(root);
+    f.server.revision += 1;
+    assert_eq!(f.run().unwrap().downloaded, 1);
+    assert_eq!(f.read("a.txt"), "one");
+}
+
+#[test]
+fn deleting_a_directory_preserves_its_tree_in_one_bulwark_compatible_trash_batch() {
+    let mut f = Fixture::new();
+    fs::create_dir(f.folder.path().join("docs")).unwrap();
+    f.local("docs/a.txt", "one");
+    f.run().unwrap();
+    let directory = f.server.node("docs").id;
+    let file = f.server.node("a.txt").id;
+    fs::remove_dir_all(f.folder.path().join("docs")).unwrap();
+    assert_eq!(f.run().unwrap().recycled, 1);
+    let moved = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| node.id == directory)
+        .unwrap();
+    let batch = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| Some(&node.id) == moved.parent_id.as_ref())
+        .unwrap();
+    let trash = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| Some(&node.id) == batch.parent_id.as_ref())
+        .unwrap();
+    assert_eq!(trash.name, ".Trash");
+    assert!(batch.name.contains('~'));
     assert_eq!(
         f.server
             .nodes
             .iter()
-            .find(|n| n.id == id)
+            .find(|node| node.id == file)
             .unwrap()
             .parent_id
-            .as_ref(),
-        Some(&trash)
+            .as_deref(),
+        Some(directory.as_str())
     );
+    assert_eq!(f.run().unwrap().downloaded, 0);
+}
+
+#[test]
+fn moving_a_remote_file_to_trash_removes_the_local_copy_and_never_syncs_trash_contents() {
+    let mut f = Fixture::new();
+    f.local("a.txt", "one");
     f.run().unwrap();
+    let mut state = f.server.state();
+    let trash = f.server.create_trash(None, &mut state).unwrap();
+    let node = f
+        .server
+        .nodes
+        .iter_mut()
+        .find(|node| node.name == "a.txt")
+        .unwrap();
+    node.parent_id = Some(trash.id);
+    f.server.revision += 1;
+    let report = f.run().unwrap();
+    assert_eq!(report.recycled, 1);
+    assert_eq!(report.downloaded, 0);
     assert!(!f.folder.path().join("a.txt").exists());
+    assert!(f.history_contains(b"one"));
+    let report = f.run().unwrap();
+    assert_eq!(report.uploaded + report.downloaded, 0);
+}
+
+#[test]
+fn a_legacy_bulwark_trash_without_a_role_is_shared_and_not_duplicated() {
+    let mut f = Fixture::new();
+    f.local("a.txt", "one");
+    f.run().unwrap();
+    let mut state = f.server.state();
+    let trash = f
+        .server
+        .create(".Trash", None, Kind::Directory, None, 0, &mut state)
+        .unwrap();
+    fs::remove_file(f.folder.path().join("a.txt")).unwrap();
+    f.run().unwrap();
+    assert_eq!(
+        f.server
+            .nodes
+            .iter()
+            .filter(|node| node.name == ".Trash")
+            .count(),
+        1
+    );
+    let batch = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| node.parent_id.as_ref() == Some(&trash.id))
+        .unwrap();
+    assert_eq!(f.server.node("a.txt").parent_id.as_ref(), Some(&batch.id));
 }
 
 #[test]

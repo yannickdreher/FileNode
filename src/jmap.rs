@@ -22,6 +22,7 @@ use std::{
 use url::Url;
 
 pub trait Remote {
+    fn create_trash(&mut self, parent: Option<&str>, state: &mut String) -> Result<Node>;
     fn account_id(&self) -> &str;
     fn current_state(&self) -> Result<String>;
     fn snapshot(&mut self, previous: Option<&Snapshot>) -> Result<Snapshot>;
@@ -47,6 +48,7 @@ pub trait Remote {
 }
 
 pub struct Jmap {
+    web_trash_url: Option<String>,
     client: Client,
     origin: Url,
     api: Url,
@@ -176,6 +178,18 @@ impl Jmap {
             .context("downloadUrl is missing")?
             .to_owned();
         let this = Self {
+            web_trash_url: account["accountCapabilities"][FILE_CAPABILITY]["webTrashUrl"]
+                .as_str()
+                .and_then(|value| {
+                    let url = origin.join(value).ok()?;
+                    if url.scheme() != "https"
+                        || !url.username().is_empty()
+                        || url.password().is_some()
+                    {
+                        return None;
+                    }
+                    Some(url.to_string())
+                }),
             client,
             origin,
             api,
@@ -419,6 +433,57 @@ impl Jmap {
         Ok(result)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn create_with_role(
+        &mut self,
+        name: &str,
+        parent: Option<&str>,
+        kind: Kind,
+        blob: Option<&str>,
+        size: u64,
+        state: &mut String,
+        role: Option<&str>,
+    ) -> Result<Node> {
+        let mut node = json!({"name":name,"parentId":parent});
+        if let Some(role) = role {
+            node["role"] = json!(role);
+        }
+        if self.modern {
+            node["@type"] = json!(if kind == Kind::Directory {
+                "Directory"
+            } else {
+                "File"
+            });
+        } else {
+            node["nodeType"] = json!(if kind == Kind::Directory {
+                "directory"
+            } else {
+                "file"
+            });
+        }
+        if let Some(blob) = blob {
+            node["blobId"] = json!(blob);
+            node[if self.modern { "mediaType" } else { "type" }] =
+                json!("application/octet-stream");
+        }
+        let result = self.mutate(json!({"create":{"drive":node}}), state)?;
+        let id = result["created"]["drive"]["id"]
+            .as_str()
+            .context("Create response has no file ID")?;
+        self.read_written_node(
+            Node {
+                id: id.into(),
+                name: name.into(),
+                parent_id: parent.map(str::to_owned),
+                blob_id: blob.map(str::to_owned),
+                kind,
+                size,
+                role: role.map(str::to_owned),
+            },
+            state,
+        )
+    }
+
     fn read_written_node(&self, expected: Node, state: &str) -> Result<Node> {
         // Upload IDs can be temporary. Stalwart returns a different linked blob ID
         // once content belongs to a FileNode. Persist the server's actual identity.
@@ -433,11 +498,15 @@ impl Jmap {
             || node.name != expected.name
             || node.parent_id != expected.parent_id
             || node.kind != expected.kind
+            || node.role != expected.role
             || (node.kind == Kind::File && node.size != expected.size)
         {
             bail!("Written FileNode does not match the requested operation");
         }
         Ok(node.clone())
+    }
+    pub fn web_trash_url(&self) -> Option<&str> {
+        self.web_trash_url.as_deref()
     }
 }
 
@@ -544,6 +613,8 @@ impl Remote for Jmap {
             .truncate(!append)
             .open(path)?;
         let mut total = if append { offset } else { 0 };
+        let progress = crate::activity::Progress::current();
+        progress.set(total);
         let mut buffer = [0u8; 16384];
         let mut budget = crate::runtime::Budget::new(self.policy.clone(), false);
         loop {
@@ -561,12 +632,25 @@ impl Remote for Jmap {
             }
             budget.reserve(n)?;
             output.write_all(&buffer[..n])?;
+            progress.set(total);
         }
         output.sync_all()?;
         if total != node.size {
             bail!("Incomplete download; resume on the next run");
         }
         Ok(())
+    }
+
+    fn create_trash(&mut self, parent: Option<&str>, state: &mut String) -> Result<Node> {
+        self.create_with_role(
+            ".Trash",
+            parent,
+            Kind::Directory,
+            None,
+            0,
+            state,
+            if self.modern { Some("trash") } else { None },
+        )
     }
 
     fn create(
@@ -578,40 +662,7 @@ impl Remote for Jmap {
         size: u64,
         state: &mut String,
     ) -> Result<Node> {
-        let mut node = json!({"name":name,"parentId":parent});
-        if self.modern {
-            node["@type"] = json!(if kind == Kind::Directory {
-                "Directory"
-            } else {
-                "File"
-            });
-        } else {
-            node["nodeType"] = json!(if kind == Kind::Directory {
-                "directory"
-            } else {
-                "file"
-            });
-        }
-        if let Some(blob) = blob {
-            node["blobId"] = json!(blob);
-            node[if self.modern { "mediaType" } else { "type" }] =
-                json!("application/octet-stream");
-        }
-        let result = self.mutate(json!({"create":{"drive":node}}), state)?;
-        let id = result["created"]["drive"]["id"]
-            .as_str()
-            .context("Create response has no file ID")?;
-        self.read_written_node(
-            Node {
-                id: id.into(),
-                name: name.into(),
-                parent_id: parent.map(str::to_owned),
-                blob_id: blob.map(str::to_owned),
-                kind,
-                size,
-            },
-            state,
-        )
+        self.create_with_role(name, parent, kind, blob, size, state, None)
     }
 
     fn update(
@@ -677,6 +728,7 @@ fn parse_node(raw: &Value) -> Result<Node> {
         name: raw["name"].as_str().context("File name is missing")?.into(),
         parent_id: raw["parentId"].as_str().map(str::to_owned),
         blob_id: raw["blobId"].as_str().map(str::to_owned),
+        role: raw["role"].as_str().map(str::to_owned),
         kind,
         size: raw["size"].as_u64().unwrap_or(0),
     };
@@ -695,6 +747,24 @@ pub fn scoped_tree(snapshot: &Snapshot, root_id: Option<&str>) -> Result<RemoteT
     if root_id.is_some_and(|id| all.get(id).is_none_or(|n| n.kind != Kind::Directory)) {
         bail!("Remote sync folder disappeared; synchronization blocked");
     }
+    if let Some(root) = root_id {
+        let mut current = all.get(root).copied();
+        let mut seen = HashSet::new();
+        while let Some(node) = current {
+            if !seen.insert(&node.id) {
+                bail!("Remote root ancestry is cyclic");
+            }
+            if node.role.as_deref() == Some("trash")
+                || (node.parent_id.is_none() && node.name == ".Trash")
+            {
+                bail!("Selected remote folder is in the trash; synchronization blocked");
+            }
+            current = node
+                .parent_id
+                .as_deref()
+                .and_then(|parent| all.get(parent).copied());
+        }
+    }
     let mut result = RemoteTree::new();
     let mut names = HashSet::new();
     for node in &snapshot.nodes {
@@ -707,6 +777,11 @@ pub fn scoped_tree(snapshot: &Snapshot, root_id: Option<&str>) -> Result<RemoteT
         let in_scope = loop {
             if !seen.insert(&current.id) || seen.len() > 128 {
                 bail!("Remote directory tree is cyclic or too deep");
+            }
+            if current.role.as_deref() == Some("trash")
+                || (current.parent_id.is_none() && current.name == ".Trash")
+            {
+                break false;
             }
             match current.parent_id.as_deref() {
                 Some(parent) if Some(parent) == root_id => break true,
@@ -765,6 +840,7 @@ mod tests {
             name: "docs".into(),
             parent_id: None,
             blob_id: None,
+            role: None,
             kind: Kind::Directory,
             size: 0,
         };
@@ -773,6 +849,7 @@ mod tests {
             name: "a.txt".into(),
             parent_id: Some("dir".into()),
             blob_id: Some("blob".into()),
+            role: None,
             kind: Kind::File,
             size: 1,
         };
@@ -879,6 +956,59 @@ mod tests {
                 "supportedNodeTypes": if modern { vec!["File", "Directory"] } else { vec!["file", "directory"] }
             }}}}, "primaryAccounts":{FILE_CAPABILITY:"account"},
             "apiUrl":"/jmap", "uploadUrl":"/upload/{accountId}/", "downloadUrl":"/download/{accountId}/{blobId}/{name}?type={type}"})
+    }
+
+    #[test]
+    fn server_trash_creation_supports_legacy_stalwart_and_directory_roles() {
+        for modern in [false, true] {
+            let (address, worker) = server(3, move |index, request| {
+                if index == 0 {
+                    return response("200 OK", "", &session(modern).to_string());
+                }
+                let request: Value = serde_json::from_slice(&request.body).unwrap();
+                let method = request["methodCalls"][0][0].as_str().unwrap();
+                let args = &request["methodCalls"][0][1];
+                let result = if index == 1 {
+                    assert_eq!(method, "FileNode/set");
+                    assert_eq!(args["create"]["drive"]["name"], ".Trash");
+                    assert_eq!(
+                        args["create"]["drive"]["role"],
+                        if modern { json!("trash") } else { Value::Null }
+                    );
+                    json!({"oldState":"0","newState":"1","created":{"drive":{"id":"trash"}}})
+                } else {
+                    assert_eq!(method, "FileNode/get");
+                    let mut node = json!({"id":"trash","name":".Trash","parentId":null,"role":if modern { Some("trash") } else { None }});
+                    node[if modern { "@type" } else { "nodeType" }] =
+                        json!(if modern { "Directory" } else { "directory" });
+                    json!({"state":"1","list":[node],"notFound":[]})
+                };
+                response(
+                    "200 OK",
+                    "",
+                    &json!({"methodResponses":[[method,result,"drive"]]}).to_string(),
+                )
+            });
+            let config = Config {
+                server: address,
+                username: "user@example.org".into(),
+                ..Default::default()
+            };
+            let mut remote = Jmap::connect_inner(
+                &config,
+                "secret".into(),
+                Arc::new(AtomicBool::new(false)),
+                true,
+            )
+            .unwrap();
+            let trash = remote.create_trash(None, &mut "0".into()).unwrap();
+            assert_eq!(trash.name, ".Trash");
+            assert_eq!(
+                trash.role.as_deref(),
+                if modern { Some("trash") } else { None }
+            );
+            worker.join().unwrap();
+        }
     }
 
     #[test]

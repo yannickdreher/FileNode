@@ -170,6 +170,9 @@ impl LocalScanner {
             .into_iter()
             .collect()
     }
+    pub fn deferred_paths(&self) -> impl Iterator<Item = &String> {
+        self.deferred.iter()
+    }
 
     pub fn watching(&self) -> bool {
         self._watcher.is_some() && !self.signals.failed.load(Ordering::Relaxed)

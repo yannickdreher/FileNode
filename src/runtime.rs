@@ -152,12 +152,16 @@ impl Budget {
 pub struct LimitedReader<R> {
     source: R,
     budget: Budget,
+    progress: crate::activity::Progress,
+    completed: u64,
 }
 impl<R> LimitedReader<R> {
     pub fn new(source: R, policy: Arc<Policy>) -> Self {
         Self {
             source,
             budget: Budget::new(policy, true),
+            progress: crate::activity::Progress::current(),
+            completed: 0,
         }
     }
 }
@@ -167,6 +171,8 @@ impl<R: Read> Read for LimitedReader<R> {
         let maximum = buffer.len().min(16 * 1024);
         let read = self.source.read(&mut buffer[..maximum])?;
         self.budget.reserve(read)?;
+        self.completed += read as u64;
+        self.progress.set(self.completed);
         Ok(read)
     }
 }
