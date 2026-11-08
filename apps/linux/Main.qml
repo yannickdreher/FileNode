@@ -18,7 +18,9 @@ ApplicationWindow {
     function showAccountForTest() { settings.showSettings(); pages.currentIndex = 1 }
     onClosing: function(close) { if (App.trayAvailable) { close.accepted = false; hide() } else { App.quit() } }
     header: ToolBar {
+        implicitHeight: headerContent.implicitHeight + 24
         ColumnLayout {
+            id: headerContent
             anchors.fill: parent; anchors.margins: 12
             RowLayout {
                 Image { source: "qrc:/filenode.svg"; sourceSize.width: 26; sourceSize.height: 26 }
@@ -80,7 +82,9 @@ ApplicationWindow {
         }
     }
     footer: ToolBar {
+        implicitHeight: footerContent.implicitHeight + 16
         RowLayout {
+            id: footerContent
             anchors.fill: parent; anchors.margins: 8
             ToolButton { text: statusWindow.t("action.open"); Layout.fillWidth: true; onClicked: App.openFolder() }
             ToolButton { text: statusWindow.t("action.online"); Layout.fillWidth: true; onClicked: App.openOnline() }

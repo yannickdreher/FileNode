@@ -23,6 +23,7 @@ internal static class WindowChrome
         void Theme()
         {
             var dark = root.ActualTheme == ElementTheme.Dark; var caption = window.AppWindow.TitleBar;
+            root.Background = new SolidColorBrush(dark ? ColorHelper.FromArgb(255, 32, 32, 32) : ColorHelper.FromArgb(255, 243, 243, 243));
             caption.ButtonBackgroundColor = Colors.Transparent; caption.ButtonInactiveBackgroundColor = Colors.Transparent;
             caption.ButtonForegroundColor = dark ? Colors.White : Colors.Black;
             caption.ButtonInactiveForegroundColor = dark ? Colors.Gray : Colors.DimGray;
