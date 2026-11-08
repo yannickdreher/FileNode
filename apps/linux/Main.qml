@@ -40,7 +40,7 @@ ApplicationWindow {
         id: statusMenu
         x: statusWindow.width - width - 12; y: 45
         MenuItem { text: statusWindow.t("tray.settings"); onTriggered: settings.showSettings() }
-        MenuItem { text: statusWindow.t(App.running ? "action.pause" : "action.resume"); onTriggered: App.running ? App.pause() : App.start() }
+        MenuItem { text: statusWindow.t(App.running ? "action.pause" : "action.start"); onTriggered: App.running ? App.pause() : App.start() }
         MenuItem { text: statusWindow.t("action.check"); enabled: App.running; onTriggered: App.check() }
         MenuSeparator {}
         MenuItem { text: statusWindow.t("tray.quit"); onTriggered: App.quit() }
@@ -134,7 +134,6 @@ ApplicationWindow {
                         ColumnLayout {
                             spacing: 16
                             Label { text: statusWindow.t("settings.sync_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Button { text: statusWindow.t("action.resume"); visible: App.authenticated && !App.running; onClicked: App.start() }
                             Label { text: statusWindow.t("settings.folders"); font.pointSize: 16 }
                             Label { text: statusWindow.t("settings.folders_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { visible: (App.config.sync_folders || []).length === 0; text: statusWindow.t("settings.no_folders"); wrapMode: Text.Wrap; Layout.fillWidth: true }

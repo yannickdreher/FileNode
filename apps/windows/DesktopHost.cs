@@ -24,7 +24,6 @@ internal sealed class DesktopHost
     private readonly Dictionary<(string, string), FileActivityRow> activityRows = [];
     private readonly List<(string Folder, TextBlock Label)> statusFolders = [], pageFolders = [];
     private InfoBar? accountStatus;
-    private Button? syncAction;
     private bool quitting, background, powerPublished;
     private string renderedLanguage = "";
     private NavigationView? navigation;
@@ -40,7 +39,7 @@ internal sealed class DesktopHost
         status.AppWindow.Resize(new SizeInt32(380, 640));
 
         status.AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "filenode.ico"));
-        tray = new NativeTray(WinRT.Interop.WindowNative.GetWindowHandle(status), key => core.T(key == "action.pause" && !core.Running ? "action.resume" : key),
+        tray = new NativeTray(WinRT.Interop.WindowNative.GetWindowHandle(status), key => core.T(key == "action.pause" && !core.Running ? "action.start" : key),
             action => Dispatch(() => Act(action)), (saver, sleeping, available) => _ = core.Power(saver, sleeping, available));
         status.AppWindow.Closing += (sender, args) =>
         {
@@ -83,7 +82,7 @@ internal sealed class DesktopHost
         var menu = new MenuFlyout();
         void Menu(string key, Action action) { var item = new MenuFlyoutItem { Text = core.T(key) }; item.Click += (_, _) => action(); menu.Items.Add(item); }
         Menu("tray.settings", ShowSettings); menu.Items.Add(new MenuFlyoutSeparator());
-        toggle = new MenuFlyoutItem { Text = core.T(core.Running ? "action.pause" : "action.resume") }; toggle.Click += Toggle; menu.Items.Add(toggle);
+        toggle = new MenuFlyoutItem { Text = core.T(core.Running ? "action.pause" : "action.start") }; toggle.Click += Toggle; menu.Items.Add(toggle);
         Menu("action.check", () => _ = core.Send("check")); menu.Items.Add(new MenuFlyoutSeparator()); Menu("tray.quit", () => _ = Quit());
         var gear = new Button { Content = new FontIcon { Glyph = "\uE713", FontSize = 18 }, Background = new SolidColorBrush(Colors.Transparent), BorderThickness = new Thickness(0), Padding = new Thickness(8), Flyout = menu };
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(gear, core.T("tray.menu")); Grid.SetColumn(gear, 1); title.Children.Add(gear);
@@ -118,9 +117,8 @@ internal sealed class DesktopHost
         if (configChanged || languageChanged) { BuildStatus(); if (languageChanged && settings is not null) BuildSettings(); else refreshFolders?.Invoke(); }
         account.Text = core.Authenticated ? core.Text("username") : core.T("account.not_connected");
         summary.Text = core.AccountStatus; error.Text = core.Error == "" ? "" : core.T("error.summary"); error.Visibility = core.Error == "" ? Visibility.Collapsed : Visibility.Visible;
-        toggle.Text = core.T(core.Running ? "action.pause" : "action.resume"); toggle.IsEnabled = core.Ready;
+        toggle.Text = core.T(core.Running ? "action.pause" : "action.start"); toggle.IsEnabled = core.Ready;
         foreach (var control in pausedControls) control.IsEnabled = !core.Running;
-        if (syncAction is not null) syncAction.Visibility = core.Authenticated && !core.Running ? Visibility.Visible : Visibility.Collapsed;
         foreach (var (folder, label) in statusFolders.Concat(pageFolders)) { label.Text = core.FolderStatus(folder); ToolTipService.SetToolTip(label, core.FolderStatuses.GetValueOrDefault(folder)?["details"]?.ToString() ?? ""); }
         if (accountAction is not null && accountActionLabel is not null) { accountAction.Content = core.T(accountActionLabel()); accountAction.IsEnabled = core.Ready && !core.Running && core.AccountState != "checking"; accountAction.Visibility = core.Authenticated && core.Running ? Visibility.Collapsed : Visibility.Visible; }
         if (accountStatus is not null) { accountStatus.Title = core.AccountStatus; accountStatus.Message = core.Authenticated ? core.Text("username") : ""; accountStatus.Severity = core.Authenticated ? InfoBarSeverity.Success : core.AccountState == "failed" ? InfoBarSeverity.Error : InfoBarSeverity.Informational; }
@@ -206,7 +204,7 @@ internal sealed class DesktopHost
     }
     private void ShowPage(int index, string title)
     {
-        refreshFolders = null; pageFolders.Clear(); accountStatus = null; syncAction = null;
+        refreshFolders = null; pageFolders.Clear(); accountStatus = null;
         pausedControls.Clear(); accountAction = null; accountActionLabel = null;
         var panel = new StackPanel { Spacing = 18, Margin = new Thickness(28), MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Stretch };
         panel.Children.Add(Label(title, 28));
@@ -232,7 +230,6 @@ internal sealed class DesktopHost
     private void SyncPage(StackPanel panel)
     {
         panel.Children.Add(Label("settings.sync_hint"));
-        syncAction = Button("action.resume", () => _ = core.Send("connect")); syncAction.Visibility = core.Authenticated && !core.Running ? Visibility.Visible : Visibility.Collapsed; panel.Children.Add(syncAction);
         panel.Children.Add(Label("settings.folders", 20));
         panel.Children.Add(Label("settings.folders_hint"));
         var rows = new StackPanel { Spacing = 12 };

@@ -153,6 +153,6 @@ void Backend::publishPower() { send({{"command","power"},{"saver",m_power.saver}
 void Backend::injectPower(bool saver, bool sleeping) { m_power.saver = saver; m_power.sleeping = sleeping; m_power.available = true; publishPower(); }
 void Backend::updateTray() {
     m_show->setText(translate("tray.show")); m_settings->setText(translate("tray.settings"));
-    m_toggle->setText(translate(m_running ? "action.pause" : "action.resume")); m_check->setText(translate("action.check")); m_check->setEnabled(m_running);
+    m_toggle->setText(translate(m_running ? "action.pause" : "action.start")); m_check->setText(translate("action.check")); m_check->setEnabled(m_running);
     m_open->setText(translate("action.open")); m_quit->setText(translate("tray.quit")); m_tray.setToolTip("FileNode — " + status());
 }
