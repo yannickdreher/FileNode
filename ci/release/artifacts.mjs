@@ -11,7 +11,7 @@ export function filenames(version, platform) {
   parseVersion(version);
   const prefix = `filenode-${version}`;
   if (platform === "linux") return [`${prefix}-linux-x86_64.tar.gz`];
-  if (platform === "windows") return [`${prefix}-windows-x86_64.zip`, `${prefix}-windows-x86_64.msix`, `${prefix}-windows-x86_64-cli.exe`];
+  if (platform === "windows") return [`${prefix}-windows-x86_64.zip`, `${prefix}-windows-x86_64.msix`, `${prefix}-windows-x86_64-cli.exe`, `${prefix}-windows-x86_64-setup.exe`];
   throw new Error("Unsupported release platform");
 }
 export async function checksum(filename) {

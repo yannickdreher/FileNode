@@ -24,7 +24,7 @@ test("GitHub publication attaches both platforms without issue or comment hooks"
       assert.ok(config.assets.some(asset => asset.path === `dist/${name}`), name);
     }
   }
-  assert.equal(config.assets.length, 6);
+  assert.equal(config.assets.length, 7);
 });
 
 test("every merged change releases with Conventional Commit version increments", async () => {
@@ -43,9 +43,9 @@ test("notes include documentation, CI and non-conventional changes", async () =>
   assert.ok(notes.includes("/commit/"), "Release notes must link to GitHub commit pages.");
   assert.ok(!notes.includes("/-/"), "GitLab-only URL formats must not appear.");
   assert.ok(notes.includes("MSIX is unsigned"), "Package installation guidance must be part of the generated release notes.");
-  assert.ok(notes.includes('Add-AppxPackage -Path ".\\filenode-1.0.0-windows-x86_64.msix" -AllowUnsigned'), "Installation guidance must use the planned release version.");
-  assert.ok(notes.includes("administrator"));
-  assert.ok(notes.includes("Windows 11"));
+  assert.ok(notes.includes('filenode-1.0.0-windows-x86_64-setup.exe'), "Installation guidance must use the planned setup version.");
+  assert.ok(!notes.includes("Add-AppxPackage"), "Standalone WinUI packages must not be advertised as installable with AllowUnsigned.");
+  assert.ok(notes.includes("per-user"));
 });
 
 test("publishing requires both platforms, the same commit and intact binary checksums", async () => {
@@ -55,7 +55,11 @@ test("publishing requires both platforms, the same commit and intact binary chec
       for (const name of filenames("1.2.3", platform)) await writeFile(path.join(directory, name), "binary fixture");
       await createManifest(directory, "1.2.3", platform, commit);
     }
-    assert.equal((await verifyArtifacts(directory, "1.2.3", commit)).length, 4);
+    assert.equal((await verifyArtifacts(directory, "1.2.3", commit)).length, 5);
+    const setup = path.join(directory, "filenode-1.2.3-windows-x86_64-setup.exe");
+    await rm(setup);
+    await assert.rejects(verifyArtifacts(directory, "1.2.3", commit), /ENOENT/);
+    await writeFile(setup, "binary fixture");
     await assert.rejects(verifyArtifacts(directory, "1.2.3", "b".repeat(40)), /commit/);
     const executable = path.join(directory, filenames("1.2.3", "windows")[2]);
     await writeFile(executable, "modified binary");

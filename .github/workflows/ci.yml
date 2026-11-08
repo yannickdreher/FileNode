@@ -71,6 +71,17 @@ jobs:
       - name: Build native WinUI frontend
         shell: powershell
         run: ./scripts/build-windows.ps1 -RustCorePath target/debug/filenode.exe -OutputDirectory .dev/windows-ci
+      - name: Build and test Windows installer
+        shell: powershell
+        run: |
+          $driveVersion = (Select-String -LiteralPath Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          ./scripts/build-windows-installer.ps1 -Version $driveVersion -SourceDirectory .dev/windows-ci -OutputDirectory .dev/windows-installer-ci
+          ./scripts/windows-installer-smoke.ps1 -Version $driveVersion -Installer ".dev/windows-installer-ci/filenode-$driveVersion-windows-x86_64-setup.exe"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-installer-check
+          path: .dev/windows-installer-ci/*-setup.exe
+          retention-days: 14
 
   plan:
     name: Plan release

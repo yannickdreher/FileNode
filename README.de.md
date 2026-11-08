@@ -29,17 +29,13 @@ Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regel
 
 ## Installation unter Windows
 
-**Portables ZIP:** Das Windows-ZIP unter [Releases](https://github.com/yannickdreher/FileNode/releases) herunterladen, vollständig in einen dauerhaften Ordner entpacken und `filenode-ui.exe` starten. Dafür sind weder eine MSIX-Installation noch ein Zertifikatimport nötig. Das ist auch die Variante für Windows 10.
+**Installer (ab 0.2.2):** `filenode-X.Y.Z-windows-x86_64-setup.exe` unter [Releases](https://github.com/yannickdreher/FileNode/releases) herunterladen und starten. Er installiert für den aktuellen Benutzer unter `%LOCALAPPDATA%\Programs\FileNode`, legt einen Startmenü-Eintrag und eine Deinstallation an und verlangt weder Administratorrechte noch einen Zertifikatimport. FileNode vor einem Update über das Tray-Menü beenden. Der Installer ist Deutsch/Englisch und folgt der hellen beziehungsweise dunklen Windows-Darstellung. Den Autostart kannst du anschließend in FileNodes allgemeinen Einstellungen aktivieren.
 
-**Unsigniertes MSIX unter Windows 11 (ab 0.2.1):** Die `.msix`-Datei herunterladen, **Windows PowerShell als Administrator** öffnen und mit `-AllowUnsigned` installieren. Beispiel für das Paket 0.2.1 im Downloads-Ordner:
+Die Setup-EXE ist derzeit unsigniert. Windows kann deshalb einen Hinweis auf den unbekannten Herausgeber oder SmartScreen anzeigen; verwaltete Geräte können unsignierte Programme einschränken. Der Installer ändert keine Windows-Sicherheitseinstellungen. Die Deinstallation entfernt die installierten Programmdateien und den zugehörigen Autostart-Eintrag. Konfiguration, gespeicherte Zugangsdaten und synchronisierte Ordner bleiben erhalten.
 
-```powershell
-Add-AppxPackage -Path "$env:USERPROFILE\Downloads\filenode-0.2.1-windows-x86_64.msix" -AllowUnsigned
-```
+**Portables ZIP:** Das Windows-ZIP vollständig in einen dauerhaften Ordner entpacken und `filenode-ui.exe` starten. Dafür ist keine Installation nötig. Installer und ZIP unterstützen Windows 10 ab Build 19041 sowie Windows 11.
 
-Pfad und Version an die heruntergeladene Datei anpassen. Diese unsignierten Pakete enthalten die besondere Publisher-OID, die Windows 11 für Testinstallationen verlangt. Den MSIX-Paketen 0.1.0 und 0.2.0 fehlt diese OID; allein der zusätzliche Parameter repariert ältere Downloads nicht. Die Installation per Doppelklick im App Installer setzt weiterhin ein vertrauenswürdig signiertes Paket voraus. Da FileNode ausführbare Dateien enthält, benötigt dieser Testweg Administratorrechte, aber keinen Zertifikatimport. Siehe [Microsofts Anleitung für unsignierte Pakete](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package).
-
-Die unsignierte Entwicklungsidentität ist von einer späteren signierten Store-Identität getrennt. Der spätere Store-Client wird daher nicht als direktes Update dieser Testinstallation installiert. Für die öffentliche Store-Verteilung verwenden wir die exakte Partner-Center-Identität und ein signiertes Paket.
+**MSIX:** Das angehängte MSIX ist für eine vertrauenswürdige Signierung oder die spätere Store-Einreichung vorgesehen. Unsigniert lässt es sich nicht direkt installieren. Die mit 0.2.1 veröffentlichte `-AllowUnsigned`-Anleitung war für FileNode falsch: Windows blockiert die ausführbare Aktivierung dieser eigenständigen WinUI-App mit `0x80073D2B`, auch mit der besonderen Publisher-OID und Administratorrechten. Der Weg für unsignierte Hosted Apps erlaubt keine eigene Aktivierung über `Executable`/`EntryPoint`. Siehe [Microsofts Hosted-App-Einschränkungen](https://learn.microsoft.com/en-us/windows/uwp/launch-resume/hosted-apps#requirements-for-unsigned-hosted-apps) und [MSIX-Signierung](https://learn.microsoft.com/en-us/windows/msix/package/signing-package-overview).
 
 ## Bauen und starten
 

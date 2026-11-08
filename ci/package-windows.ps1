@@ -7,6 +7,10 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows release build failed.' }
 Copy-Item -LiteralPath README.md,README.de.md,config.example.toml,.release/RELEASE-NOTES.md -Destination dist/windows
 $drivePrefix = 'dist/filenode-' + $env:RELEASE_VERSION + '-windows-x86_64'
 Compress-Archive -Path dist/windows/* -DestinationPath ($drivePrefix + '.zip') -Force
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-installer.ps1 -Version $env:RELEASE_VERSION -SourceDirectory dist/windows -OutputDirectory dist
+if ($LASTEXITCODE -ne 0) { throw 'Windows EXE installer build failed.' }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-installer-smoke.ps1 -Version $env:RELEASE_VERSION -Installer ($drivePrefix + '-setup.exe')
+if ($LASTEXITCODE -ne 0) { throw 'Windows EXE installer deployment test failed.' }
 $driveReleaseCore = Join-Path (Get-Location).Path 'target/x86_64-pc-windows-msvc/release/filenode.exe'
 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Configuration Release -Package -RustCorePath $driveReleaseCore -OutputDirectory dist/windows-msix
 if ($LASTEXITCODE -ne 0) { throw 'Windows MSIX build failed.' }

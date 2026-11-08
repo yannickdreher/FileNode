@@ -4,10 +4,10 @@
     xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
     IgnorableNamespaces="uap desktop rescap">
-  <!-- Windows 11 unsigned test identity: the OID enables Add-AppxPackage -AllowUnsigned.
-       For Store submission, replace Name/Publisher with the exact Partner Center identity,
-       removing this unsigned-package OID. -->
-  <Identity Name="FileNode.Development" Publisher="CN=FileNode Development, OID.2.25.311729368913984317654407730594956997722=1" Version="0.2.1.0" />
+  <!-- Development identity: sign with a trusted matching certificate for deployment,
+       or replace Name/Publisher with the exact Partner Center identity for the Store.
+       This standalone WinUI app cannot be installed as an unsigned hosted package. -->
+  <Identity Name="FileNode.Development" Publisher="CN=FileNode Development" Version="0.2.2.0" />
   <Properties><DisplayName>FileNode</DisplayName><PublisherDisplayName>FileNode</PublisherDisplayName><Logo>Assets\StoreLogo.png</Logo></Properties>
   <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
   <Resources><Resource Language="en-US" /><Resource Language="de-DE" /></Resources>
