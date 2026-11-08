@@ -13,13 +13,15 @@ The public repository is [yannickdreher/FileNode](https://github.com/yannickdreh
 
 The main workflow is serialized using a concurrency group with cancellation disabled. Publishing recomputes the release and rejects a mismatched plan. semantic-release also refuses to publish stale main history. Tag pushes do not start another build. A failed job can be rerun from Actions; if main has advanced, use the newer complete run.
 
+For a follow-up such as 0.2.1 after 0.2.0, prepare and check the patch on a separate branch, then wait for the running main release to finish before merging. This preserves the previous release's source commit and publication plan, without canceling its workflow. A `fix:` commit after the published 0.2.0 tag plans 0.2.1.
+
 Only planning and publishing have `contents: write`. They use the run's short-lived **GITHUB_TOKEN**. No personal access token, imported GitLab RELEASE_TOKEN, manual secret or npm publishing credential is needed. Build jobs have read-only contents permission. Node installs use `npm ci --ignore-scripts`.
 
 ## Downloads
 
 - `filenode-X.Y.Z-linux-x86_64.tar.gz`: Linux CLI, worker, Qt desktop frontend, docs and release notes. Requires Qt 6.4+, glibc compatible with Debian 12, D-Bus and a Secret Service. This is not a standalone AppImage.
 - `filenode-X.Y.Z-windows-x86_64.zip`: complete self-contained WinUI app, worker and dependencies. Extract and start `filenode-ui.exe`.
-- `filenode-X.Y.Z-windows-x86_64.msix`: **unsigned** package with development identity. Signing/trust or a Microsoft Store identity is still required for normal installation/submission. The workflow does not publish to the Store.
+- `filenode-X.Y.Z-windows-x86_64.msix`: **unsigned** package with development identity. Starting with 0.2.1, its publisher includes the unsigned-package OID required for test installation on Windows 11 using `Add-AppxPackage -AllowUnsigned` in Windows PowerShell as administrator. Older packages lack this marker. See the [installation instructions](../README.md#install-on-windows). Double-click installation and normal distribution require a trusted signature. The workflow does not publish to the Store; replace the identity and remove the unsigned OID before signed Store submission.
 - `filenode-X.Y.Z-windows-x86_64-cli.exe`: command-line executable, not the WinUI app.
 - `SHA256SUMS` and `BUILD-INFO.json`: checksums and provenance for all published files.
 

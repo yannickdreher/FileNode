@@ -27,6 +27,20 @@ Both frontends share `locales/en.json` and `locales/de.json`, the configuration 
 - Desktop power notifications pause work during energy saver/standby; the energy saver preference can be disabled. Resume causes fresh verification. The application never inhibits sleep.
 - HTTPS, origin-checked endpoints and app passwords in Windows Credential Manager or Linux Secret Service.
 
+## Install on Windows
+
+**Portable ZIP:** download the Windows ZIP from [Releases](https://github.com/yannickdreher/FileNode/releases), extract the complete archive to a permanent folder, and start `filenode-ui.exe`. No MSIX installation or certificate import is needed. This is also the option for Windows 10.
+
+**Unsigned MSIX on Windows 11 (0.2.1 and later):** download the `.msix`, open **Windows PowerShell as administrator**, and install it with `-AllowUnsigned`. For example, with the 0.2.1 package in your Downloads folder:
+
+```powershell
+Add-AppxPackage -Path "$env:USERPROFILE\Downloads\filenode-0.2.1-windows-x86_64.msix" -AllowUnsigned
+```
+
+Adjust the path/version to the downloaded file. These unsigned packages contain the special publisher OID required by Windows 11 for test installation. The 0.1.0 and 0.2.0 MSIX packages lack that OID; adding the flag does not fix those older downloads. Double-click installation through App Installer still requires a trusted signed package. Administrator rights are required for unsigned packages containing executables; no certificate import is needed for this test path. See [Microsoft's unsigned-package instructions](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package).
+
+The unsigned development identity is separate from a future signed/Store identity, so this test installation is not an in-place upgrade path to the Store app. Public Store distribution will use the exact Partner Center identity and a signed package.
+
 ## Build and start
 
 See [development](docs/development.md) and [desktop architecture/packaging](docs/desktop-frontends.md).

@@ -43,6 +43,9 @@ test("notes include documentation, CI and non-conventional changes", async () =>
   assert.ok(notes.includes("/commit/"), "Release notes must link to GitHub commit pages.");
   assert.ok(!notes.includes("/-/"), "GitLab-only URL formats must not appear.");
   assert.ok(notes.includes("MSIX is unsigned"), "Package installation guidance must be part of the generated release notes.");
+  assert.ok(notes.includes('Add-AppxPackage -Path ".\\filenode-1.0.0-windows-x86_64.msix" -AllowUnsigned'), "Installation guidance must use the planned release version.");
+  assert.ok(notes.includes("administrator"));
+  assert.ok(notes.includes("Windows 11"));
 });
 
 test("publishing requires both platforms, the same commit and intact binary checksums", async () => {
