@@ -29,7 +29,7 @@ verify-linux:
     paths: [.cargo/registry/, .cargo/git/]
   before_script:
     - apt-get update -qq
-    - apt-get install -y --no-install-recommends pkg-config libdbus-1-dev cmake ninja-build build-essential qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript libgl1-mesa-dri xvfb xauth dbus-x11 python3-dbus python3-gi openbox imagemagick xdotool
+    - apt-get install -y --no-install-recommends pkg-config libdbus-1-dev cmake ninja-build build-essential qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript libgl1-mesa-dri xvfb xauth dbus-x11 python3-dbus python3-gi openbox imagemagick xdotool wmctrl
     - rustup component add clippy rustfmt rust-src
   script:
     - cargo fmt --all -- --check
@@ -41,7 +41,7 @@ verify-linux:
   artifacts:
     when: always
     expire_in: 14 days
-    paths: [artifacts/*.png]
+    paths: [artifacts/*.png, artifacts/*.log]
 
 verify-release-tools:
   stage: verify
