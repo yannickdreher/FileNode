@@ -21,7 +21,8 @@ Only planning and publishing have `contents: write`. They use the run's short-li
 
 - `filenode-X.Y.Z-linux-x86_64.tar.gz`: Linux CLI, worker, Qt desktop frontend, docs and release notes. Requires Qt 6.4+, glibc compatible with Debian 12, D-Bus and a Secret Service. This is not a standalone AppImage.
 - `filenode-X.Y.Z-windows-x86_64.zip`: complete self-contained WinUI app, worker and dependencies. Extract and start `filenode-ui.exe`.
-- `filenode-X.Y.Z-windows-x86_64.msix`: **unsigned** package with development identity. Starting with 0.2.1, its publisher includes the unsigned-package OID required for test installation on Windows 11 using `Add-AppxPackage -AllowUnsigned` in Windows PowerShell as administrator. Older packages lack this marker. See the [installation instructions](../README.md#install-on-windows). Double-click installation and normal distribution require a trusted signature. The workflow does not publish to the Store; replace the identity and remove the unsigned OID before signed Store submission.
+- `filenode-X.Y.Z-windows-x86_64-setup.exe`: per-user Windows installer from 0.2.2 onward, including Start menu/uninstall integration. No MSIX certificate import is needed; the unsigned EXE may still show Windows publisher/SmartScreen notices. Both the checked build and optimized release installer undergo install/uninstall smoke tests on a disposable Windows runner.
+- `filenode-X.Y.Z-windows-x86_64.msix`: unsigned packaging artifact requiring trusted signing or Store signing before installation. The 0.2.1 OID/AllowUnsigned instructions were incorrect: executable activations are not permitted by the unsigned hosted-package route. See [installation instructions](../README.md#install-on-windows). The workflow does not publish to the Store.
 - `filenode-X.Y.Z-windows-x86_64-cli.exe`: command-line executable, not the WinUI app.
 - `SHA256SUMS` and `BUILD-INFO.json`: checksums and provenance for all published files.
 

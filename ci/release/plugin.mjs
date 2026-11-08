@@ -11,7 +11,8 @@ export function githubConfig(version) {
     assets: [
       { path: `dist/filenode-${version}-linux-x86_64.tar.gz`, label: "Linux x86_64" },
       { path: `dist/filenode-${version}-windows-x86_64.zip`, label: "Windows x64 portable app" },
-      { path: `dist/filenode-${version}-windows-x86_64.msix`, label: "Windows x64 MSIX (unsigned)" },
+      { path: `dist/filenode-${version}-windows-x86_64-setup.exe`, label: "Windows x64 installer" },
+      { path: `dist/filenode-${version}-windows-x86_64.msix`, label: "Windows x64 MSIX (requires signing)" },
       { path: `dist/filenode-${version}-windows-x86_64-cli.exe`, label: "Windows x64 command-line executable" },
       { path: "dist/SHA256SUMS", label: "SHA-256 checksums" },
       { path: "dist/BUILD-INFO.json", label: "Build provenance" },
