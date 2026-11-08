@@ -4,8 +4,10 @@
     xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
     xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
     IgnorableNamespaces="uap desktop rescap">
-  <!-- Development identity: replace with the exact Partner Center identity before submission. -->
-  <Identity Name="FileNode.Development" Publisher="CN=FileNode Development" Version="0.2.0.0" />
+  <!-- Windows 11 unsigned test identity: the OID enables Add-AppxPackage -AllowUnsigned.
+       For Store submission, replace Name/Publisher with the exact Partner Center identity,
+       removing this unsigned-package OID. -->
+  <Identity Name="FileNode.Development" Publisher="CN=FileNode Development, OID.2.25.311729368913984317654407730594956997722=1" Version="0.2.1.0" />
   <Properties><DisplayName>FileNode</DisplayName><PublisherDisplayName>FileNode</PublisherDisplayName><Logo>Assets\StoreLogo.png</Logo></Properties>
   <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
   <Resources><Resource Language="en-US" /><Resource Language="de-DE" /></Resources>

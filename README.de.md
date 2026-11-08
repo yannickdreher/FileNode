@@ -27,6 +27,20 @@ Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regel
 - Desktop-Energieereignisse pausieren Scans und Übertragungen bei Energiesparen/Standby. Die Energiesparoption ist abschaltbar; nach dem Aufwachen wird neu geprüft. Die App verhindert den Standby nicht.
 - App-Passwörter im Windows Credential Manager oder Linux Secret Service, HTTPS und Prüfung der Endpoint-Origin.
 
+## Installation unter Windows
+
+**Portables ZIP:** Das Windows-ZIP unter [Releases](https://github.com/yannickdreher/FileNode/releases) herunterladen, vollständig in einen dauerhaften Ordner entpacken und `filenode-ui.exe` starten. Dafür sind weder eine MSIX-Installation noch ein Zertifikatimport nötig. Das ist auch die Variante für Windows 10.
+
+**Unsigniertes MSIX unter Windows 11 (ab 0.2.1):** Die `.msix`-Datei herunterladen, **Windows PowerShell als Administrator** öffnen und mit `-AllowUnsigned` installieren. Beispiel für das Paket 0.2.1 im Downloads-Ordner:
+
+```powershell
+Add-AppxPackage -Path "$env:USERPROFILE\Downloads\filenode-0.2.1-windows-x86_64.msix" -AllowUnsigned
+```
+
+Pfad und Version an die heruntergeladene Datei anpassen. Diese unsignierten Pakete enthalten die besondere Publisher-OID, die Windows 11 für Testinstallationen verlangt. Den MSIX-Paketen 0.1.0 und 0.2.0 fehlt diese OID; allein der zusätzliche Parameter repariert ältere Downloads nicht. Die Installation per Doppelklick im App Installer setzt weiterhin ein vertrauenswürdig signiertes Paket voraus. Da FileNode ausführbare Dateien enthält, benötigt dieser Testweg Administratorrechte, aber keinen Zertifikatimport. Siehe [Microsofts Anleitung für unsignierte Pakete](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package).
+
+Die unsignierte Entwicklungsidentität ist von einer späteren signierten Store-Identität getrennt. Der spätere Store-Client wird daher nicht als direktes Update dieser Testinstallation installiert. Für die öffentliche Store-Verteilung verwenden wir die exakte Partner-Center-Identität und ein signiertes Paket.
+
 ## Bauen und starten
 
 Die [deutsche Entwicklungsanleitung](docs/development.de.md) beschreibt VS Code und Voraussetzungen. [Projektstruktur und Paketierung](docs/desktop-frontends.md) sind Englisch dokumentiert.

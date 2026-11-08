@@ -26,6 +26,10 @@ Closing windows keeps the host and worker alive. Quit closes the worker cleanly;
 
 `-Configuration Release -Package` creates an unsigned MSIX in `apps/windows/AppPackages`. The project refuses packaging if the Rust executable is missing. `Package.appxmanifest` includes desktop full-trust capability and an opt-in startup task. Packaged startup uses Windows StartupTask; unpackaged startup uses HKCU. Package creation never registers, installs or submits the app.
 
+Starting with 0.2.1, the development publisher includes `OID.2.25.311729368913984317654407730594956997722=1`. Windows 11 requires this marker to install unsigned executable packages using `Add-AppxPackage -AllowUnsigned` in an elevated Windows PowerShell session. App Installer double-click installation still requires a trusted signature. Windows 10 users can use the portable ZIP. See [installation instructions](../README.md#install-on-windows) and [Microsoft's unsigned-package documentation](https://learn.microsoft.com/en-us/windows/msix/package/unsigned-package).
+
+Remove this OID when replacing the development identity with the exact Partner Center identity for signed Store submission. The unsigned installation has a separate package identity and cannot be updated in place to a signed/Store package.
+
 The manifest identity and publisher are **development placeholders**. Before Store submission, reserve the app in Partner Center, copy its exact identity/publisher into the manifest, add actual store metadata/privacy/support information, validate release architectures, and run native interactive acceptance plus the Windows App Certification Kit. Store certification is not implied by a successful build. The FileNode name has not been trademark-cleared. See [Microsoft publishing guidance](https://learn.microsoft.com/en-us/windows/apps/publish/).
 
 The required Windows jobs run on GitHub-hosted `windows-2025` runners with .NET 10 and the Rust MSVC/C++ prerequisites. It separately builds the unpackaged portable desktop app and the unsigned MSIX, using separate intermediate outputs. Release publication waits for Linux and Windows assets. See [releases](releases.md).
