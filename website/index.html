@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="NoriDrive brings your JMAP files to Windows and Linux. A quiet desktop sync client with a Rust core, native interfaces and browser sign-in.">
+  <meta name="theme-color" content="#f5f6f0">
+  <title>NoriDrive — Your files. At home on your desktop.</title>
+  <link rel="icon" href="./mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./style.css">
+  <script src="./config.js" defer></script>
+  <script src="./app.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main" data-i18n="skip">Skip to content</a>
+  <header class="shell navigation">
+    <a class="brand" href="./" aria-label="NoriDrive home"><img src="./mark.svg" width="32" height="32" alt="">NoriDrive<span class="preview" data-i18n="preview">Preview</span></a>
+    <nav aria-label="Main navigation" data-i18n-aria="nav">
+      <a href="#how" data-i18n="howNav">How it works</a>
+      <a href="https://github.com/yannickdreher/NoriDrive" class="source-link">GitHub <span aria-hidden="true">↗</span></a>
+      <div class="language" role="group" aria-label="Language" data-i18n-aria="language"><button type="button" data-language="en" aria-pressed="true">EN</button><button type="button" data-language="de" aria-pressed="false">DE</button></div>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="shell hero">
+      <div class="hero-copy">
+        <p class="eyebrow"><span class="dot"></span><span data-i18n="eyebrow">YOUR CLOUD, A LITTLE CLOSER</span></p>
+        <h1 data-i18n-html="headline">Your files.<br>At home on<br><em>your desktop.</em></h1>
+        <p class="lead" data-i18n="intro">Bring your JMAP files to Windows and Linux. NoriDrive keeps a local copy in sync while you get on with your day.</p>
+        <div class="hero-actions"><a class="button primary" href="#download"><span data-i18n="getApp">Get NoriDrive</span><span aria-hidden="true">↓</span></a><a class="text-link" href="https://github.com/yannickdreher/NoriDrive" data-i18n="explore">Explore the project ↗</a></div>
+        <p class="hero-meta" data-i18n="heroMeta">Windows + Linux · English + Deutsch · Built with Rust</p>
+      </div>
+      <div class="hero-art" aria-label="Illustration of NoriDrive's tray activity panel" data-i18n-aria="illustration">
+        <div class="orbit orbit-one"></div><div class="orbit orbit-two"></div>
+        <div class="floating-label"><span class="dot"></span><span data-i18n="quiet">Quietly in the background.</span></div>
+        <div class="app-panel">
+          <div class="panel-top"><span class="mini-brand"><img src="./mark.svg" width="25" height="25" alt="">NoriDrive</span><span class="gear" aria-hidden="true">⚙</span></div>
+          <div class="sync-status"><span class="check">✓</span><span data-i18n="upToDate">Everything is up to date</span></div>
+          <div class="panel-section" data-i18n="activity">RECENT ACTIVITY</div>
+          <div class="file-row"><span class="file-icon green" aria-hidden="true">↗</span><span><strong>Project notes.md</strong><small data-i18n="syncedDesktop">Synced to Desktop</small></span><span class="row-check" aria-hidden="true">✓</span></div>
+          <div class="file-row"><span class="file-icon peach" aria-hidden="true">▧</span><span><strong>Morning light.jpg</strong><small data-i18n="available">Available on this device</small></span><span class="row-check" aria-hidden="true">✓</span></div>
+          <div class="file-row"><span class="file-icon blue" aria-hidden="true">≡</span><span><strong>Ideas for later.txt</strong><small data-i18n="syncedDesktop">Synced to Desktop</small></span><span class="row-check" aria-hidden="true">✓</span></div>
+          <div class="panel-footer"><span><span aria-hidden="true">▱</span><span data-i18n="openFolder">Open folder</span></span><span><span aria-hidden="true">◎</span><span data-i18n="viewOnline">View online</span></span></div>
+        </div>
+        <div class="platform-stamp"><span class="stamp-icon" aria-hidden="true">↔</span><div><strong>JMAP Files</strong><small data-i18n="ownServer">Your server. Your files.</small></div></div>
+        <span class="art-caption" data-i18n="artCaption">Illustrative activity preview</span>
+      </div>
+    </section>
+
+    <div class="shell principles"><span data-i18n="principle1">A real local copy</span><span class="separator" aria-hidden="true">✳</span><span data-i18n="principle2">Your existing JMAP server</span><span class="separator" aria-hidden="true">✳</span><span data-i18n="principle3">A place in your system tray</span></div>
+
+    <section id="how" class="shell how section-space">
+      <div class="section-heading"><p class="eyebrow" data-i18n="howEyebrow">LESS SETUP. MORE DOING.</p><h2 data-i18n-html="howTitle">Pick a folder.<br>Make yourself at home.</h2></div>
+      <div class="how-content"><p data-i18n="howText">Connect your JMAP Files account, choose a local folder, and sign in. NoriDrive creates a matching folder on your server. No remote paths to figure out.</p><div class="folder-route"><div><span class="route-label" data-i18n="onDevice">ON YOUR DEVICE</span><strong><span aria-hidden="true">▱</span> Desktop</strong><code>C:\Users\you\Desktop</code></div><span class="route-arrow" aria-hidden="true">↔</span><div><span class="route-label" data-i18n="onServer">ON YOUR SERVER</span><strong><span aria-hidden="true">☁</span> Desktop</strong><code>/Desktop</code></div></div><a class="text-link" href="https://github.com/yannickdreher/NoriDrive/blob/main/docs/browser-authentication.md" data-i18n="signInDocs">Browser sign-in & server requirements ↗</a></div>
+    </section>
+
+    <section class="details-section"><div class="shell details-grid">
+      <article><span class="feature-number">01 /</span><h3 data-i18n="nativeTitle">Fits your desktop.</h3><p data-i18n="nativeText">WinUI 3 on Windows. Qt 6 with KDE integration on Linux. A compact tray panel when you need it, out of the way when you don't.</p></article>
+      <article><span class="feature-number">02 /</span><h3 data-i18n="careTitle">A little extra care.</h3><p data-i18n="careText">Conflicting edits keep both versions. Busy files can wait. Deletion sync is your choice, with recovery storage for older copies.</p></article>
+      <article><span class="feature-number">03 /</span><h3 data-i18n="paceTitle">At your own pace.</h3><p data-i18n="paceText">Set separate upload and download limits. Desktop power signals pause scanning and transfers during energy saving and sleep.</p></article>
+    </div></section>
+
+    <section id="download" class="shell section-space download">
+      <div class="section-heading"><p class="eyebrow" data-i18n="downloadEyebrow">YOUR NEXT QUIET LITTLE UTILITY</p><h2 data-i18n="downloadTitle">Meet your new sync companion.</h2><p data-i18n="downloadIntro">NoriDrive is a preview. Start with a dedicated test folder and a compatible JMAP Files server.</p></div>
+      <div class="download-grid">
+        <article class="download-card"><span class="os-icon" aria-hidden="true">⊞</span><h3>Windows</h3><p data-i18n="windowsText">Native WinUI interface. Extract the portable ZIP and start NoriDrive.</p><a class="button primary" id="windows-download" href="https://github.com/yannickdreher/NoriDrive/releases"><span data-i18n="windowsButton">Windows downloads</span><span aria-hidden="true">↗</span></a><small data-i18n="windowsMeta">x64 · Portable ZIP · Unsigned MSIX also available</small></article>
+        <article class="download-card"><span class="os-icon" aria-hidden="true">⌘</span><h3>Linux</h3><p data-i18n="linuxText">Qt desktop interface with KDE styling when installed. Includes the sync core and CLI.</p><a class="button secondary" id="linux-download" href="https://github.com/yannickdreher/NoriDrive/releases"><span data-i18n="linuxButton">Linux downloads</span><span aria-hidden="true">↗</span></a><small data-i18n="linuxMeta">x86_64 · Qt 6.4+ · Debian 12 compatible glibc</small></article>
+      </div>
+      <div class="store-row"><button id="store-soon" type="button" class="button store-button" disabled data-i18n="storeSoon">Microsoft Store — coming soon</button><a id="store-link" class="button store-button" hidden><span data-i18n="storeOpen">Open Microsoft Store</span><span aria-hidden="true">↗</span></a><a id="store-web-link" hidden data-i18n="storeWeb">View in browser ↗</a><p data-i18n="storeHint">The Store listing is being prepared. Portable downloads are available through GitHub Releases.</p></div>
+      <div class="release-line"><span id="release-status" aria-live="polite" data-i18n="releaseFallback">Available builds and change notes are listed on GitHub Releases.</span><a href="https://github.com/yannickdreher/NoriDrive/releases" data-i18n="allReleases">All releases & checksums ↗</a></div>
+    </section>
+
+    <section class="shell faq section-space"><h2 data-i18n="faqTitle">A few things to know.</h2><div class="faq-list">
+      <details><summary data-i18n="faq1Title">What server do I need?</summary><p data-i18n="faq1Text">A server that supports JMAP Files, such as a compatible Stalwart deployment. NoriDrive is a client for your server, not a hosted storage service. Browser sign-in depends on your server and identity provider configuration; app-password sign-in is also supported.</p></details>
+      <details><summary data-i18n="faq2Title">Are my files available offline?</summary><p data-i18n="faq2Text">Yes. Synced files are complete local files. NoriDrive currently uses full-file synchronization; it does not provide cloud-only placeholders or block-level delta transfers.</p></details>
+      <details><summary data-i18n="faq3Title">Does it work on GNOME?</summary><p data-i18n="faq3Text">The Linux frontend is Qt, including on GNOME. KDE styling is used when the integration is installed. GNOME may need an AppIndicator extension for the tray icon; without a tray, keep the status window open or minimized.</p></details>
+      <details><summary data-i18n="faq4Title">Is the Windows package signed?</summary><p data-i18n="faq4Text">The current MSIX is unsigned and uses a development identity. It needs signing or trust configuration for normal installation. The portable ZIP is a separate download. Microsoft Store publication is not available yet.</p></details>
+    </div></section>
+  </main>
+  <footer class="shell footer"><a class="brand" href="./"><img src="./mark.svg" width="26" height="26" alt="">NoriDrive</a><span data-i18n="footer">A small place for your files to feel at home.</span><a href="https://github.com/yannickdreher/NoriDrive" data-i18n="source">Source & documentation ↗</a></footer>
+</body>
+</html>

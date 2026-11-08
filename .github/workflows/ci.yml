@@ -1,0 +1,192 @@
+name: Build, test and release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tooling:
+    name: Release tooling
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm test
+
+  linux-check:
+    name: Linux core and desktop
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container: rust:1-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57
+    env:
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - name: Install build and desktop test dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends git ca-certificates build-essential pkg-config libdbus-1-dev cmake ninja-build qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript libgl1-mesa-dri xvfb xauth dbus-x11 python3-dbus python3-gi openbox imagemagick xdotool wmctrl
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup component add clippy rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+      - run: cargo check --locked --no-default-features
+      - run: sh scripts/build-linux.sh debug
+      - name: Native tray lifecycle
+        run: DRIVE_UI="$PWD/target/debug/noridrive-ui" DRIVE_CORE="$PWD/target/debug/noridrive" dbus-run-session -- sh scripts/desktop-smoke.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: linux-ui-check
+          path: artifacts/
+          retention-days: 14
+
+  windows-check:
+    name: Windows core and WinUI
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - run: rustup component add clippy rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+      - run: cargo build --locked
+      - name: Build native WinUI frontend
+        shell: powershell
+        run: ./scripts/build-windows.ps1 -RustCorePath target/debug/noridrive.exe -OutputDirectory .dev/windows-ci
+
+  plan:
+    name: Plan release
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [tooling, linux-check, windows-check]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - id: plan
+        run: npm run release:plan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-plan
+          path: .release/
+          include-hidden-files: true
+          retention-days: 90
+
+  linux-package:
+    name: Package Linux
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    container: rust:1-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - name: Install packaging dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y --no-install-recommends git ca-certificates nodejs build-essential pkg-config libdbus-1-dev cmake ninja-build qt6-base-dev qt6-declarative-dev
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-plan
+          path: .release
+      - run: sh ci/package-linux.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-release
+          path: |
+            dist/*.tar.gz
+            dist/build-linux.json
+          retention-days: 90
+
+  windows-package:
+    name: Package Windows
+    needs: plan
+    if: needs.plan.outputs.version != ''
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-plan
+          path: .release
+      - name: Build portable app, MSIX and CLI
+        shell: powershell
+        run: ./ci/package-windows.ps1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-release
+          path: |
+            dist/*.zip
+            dist/*.msix
+            dist/*.exe
+            dist/build-windows.json
+          retention-days: 90
+
+  publish:
+    name: Publish GitHub release
+    needs: [plan, linux-package, windows-package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-plan
+          path: .release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: '*-release'
+          path: dist
+          merge-multiple: true
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run release:publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

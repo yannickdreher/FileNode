@@ -186,7 +186,7 @@ ApplicationWindow {
                             Label { text: statusWindow.t("about.description"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { text: statusWindow.t("about.limits"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { text: "Qt Quick Controls · " + App.style }
-                            Button { text: statusWindow.t("about.project"); onClicked: Qt.openUrlExternally("https://gitlab.example.com/noritec/noridrive") }
+                            Button { text: statusWindow.t("about.project"); onClicked: Qt.openUrlExternally("https://github.com/yannickdreher/NoriDrive") }
                         }
                     }
                     RowLayout {

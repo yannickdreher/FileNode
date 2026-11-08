@@ -10,7 +10,7 @@ The repository contains one Rust synchronization implementation and two desktop 
 | `apps/linux` | C++ / Qt 6 / QML | Qt controls, KDE integration, tray, D-Bus power events |
 | `locales` | Shared JSON catalogs | English/German UI and structured activity messages |
 
-These are build projects in the same GitLab repository. Separate repositories would add release/version coordination without removing any UI maintenance.
+These are build projects in the same GitHub repository. Separate repositories would add release/version coordination without removing any UI maintenance.
 
 ## Process lifetime and protocol
 

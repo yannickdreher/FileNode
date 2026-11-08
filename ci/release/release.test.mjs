@@ -8,9 +8,24 @@ import { analyzeCommits } from "@semantic-release/commit-analyzer";
 import { analyzer } from "./options.mjs";
 import { generateNotes } from "./notes.mjs";
 import { createManifest, verifyArtifacts, filenames, parseVersion } from "./artifacts.mjs";
+import * as publisher from "./plugin.mjs";
 
 const commit = "a".repeat(40);
 const logger = { log() {}, error() {} };
+
+test("GitHub publication attaches both platforms without issue or comment hooks", () => {
+  const config = publisher.githubConfig("1.2.3");
+  assert.equal(config.successComment, false);
+  assert.equal(config.failComment, false);
+  assert.equal(publisher.success, undefined);
+  assert.equal(publisher.fail, undefined);
+  for (const platform of ["linux", "windows"]) {
+    for (const name of filenames("1.2.3", platform)) {
+      assert.ok(config.assets.some(asset => asset.path === `dist/${name}`), name);
+    }
+  }
+  assert.equal(config.assets.length, 6);
+});
 
 test("every merged change releases with Conventional Commit version increments", async () => {
   for (const [message, expected] of [["feat: add a feature", "minor"], ["fix: repair sync", "patch"], ["docs: clarify setup", "patch"], ["ci: update runner", "patch"], ["Update translations", "patch"], ["feat!: change protocol", "major"]]) {
@@ -22,10 +37,11 @@ test("notes include documentation, CI and non-conventional changes", async () =>
   const notes = await generateNotes({}, {
     commits: ["docs: clarify setup", "ci: update runner", "Update translations"].map(message => ({ message, hash: commit })),
     lastRelease: {}, nextRelease: { version: "1.0.0", gitTag: "v1.0.0", gitHead: commit },
-    options: { repositoryUrl: "https://gitlab.example.com/noritec/noridrive.git" }, cwd: process.cwd(), logger,
+    options: { repositoryUrl: "https://github.com/yannickdreher/NoriDrive.git" }, cwd: process.cwd(), logger,
   });
   for (const text of ["clarify setup", "update runner", "Update translations"]) assert.ok(notes.includes(text), text);
-  assert.ok(notes.includes("/-/commit/"), "Release notes must link to GitLab commit pages.");
+  assert.ok(notes.includes("/commit/"), "Release notes must link to GitHub commit pages.");
+  assert.ok(!notes.includes("/-/"), "GitLab-only URL formats must not appear.");
   assert.ok(notes.includes("MSIX is unsigned"), "Package installation guidance must be part of the generated release notes.");
 });
 

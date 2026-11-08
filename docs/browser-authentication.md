@@ -14,11 +14,11 @@ App-password authentication remains available, with a separate credential entry.
 
 The Account page has one **Sign in** action for either method. It sends the current form settings to the worker and waits for the successful save acknowledgement before starting authentication. Configuration errors stop that sequence and are shown in the page; no separate Save button is needed on this page.
 
-## Server requirements and observed deployment
+## Server requirements
 
 The default requested scopes are `urn:ietf:params:oauth:scope:files offline_access`. The issuer must advertise PKCE S256 and support public clients (`token_endpoint_auth_method=none`), refresh tokens and the requested scopes. Discovery, registration and token endpoints require HTTPS on the configured issuer origin and never follow redirects. When no client ID is set, a compatible provider is asked to register NoriDrive as a public native application. An installation does not register anything until its user explicitly starts browser sign-in.
 
-On **2026-11-07**, read-only discovery at `https://jmap.example.com/.well-known/oauth-authorization-server` advertised Authorization Code, refresh tokens, public clients and PKCE S256, but advertised only `openid`, `offline_access`, mail, contacts and calendars scopes. The official Stalwart **v0.16.27** source likewise has no files scope in `SUPPORTED_SCOPES`. NoriDrive therefore rejects the default browser flow on that deployment before client registration or browser launch. It does not silently replace file-only authorization with full-account access. App-password synchronization continues to work.
+Stalwart deployments can advertise Authorization Code, refresh tokens, public clients and PKCE S256 while listing only `openid`, `offline_access`, mail, contacts and calendars scopes. The Stalwart **v0.16.27** source has no files scope in `SUPPORTED_SCOPES`. NoriDrive rejects its default file-only browser flow when that scope is missing, before client registration or browser launch. It does not silently replace file-only authorization with full-account access. App-password synchronization remains available.
 
 Use a Stalwart version/configuration that advertises and grants file access, or configure an external authorization server whose access tokens Stalwart explicitly trusts for that account. Publishing a discovery URL alone does not establish that trust. No production provider/client/directory settings were changed while implementing this feature, and no live user sign-in has been tested.
 
@@ -26,7 +26,7 @@ References: [Stalwart scopes](https://stalw.art/docs/auth/oauth/scopes/), [publi
 
 ## External providers such as authentik
 
-An authentik login for GitLab does not make authentik tokens valid for Stalwart. The administrator must configure Stalwart as an OAuth resource server/OIDC directory that validates the intended provider, audiences, claims and permissions, and provisions/maps the account correctly. An existing public Noritec Mail client already trusted by Stalwart can be reused, with an additional desktop callback URI. A separate provider is not required for the callback port. Do not reuse GitLab's confidential client ID/secret.
+An authentik login for another application does not automatically make its tokens valid for Stalwart. The administrator must configure Stalwart as an OAuth resource server/OIDC directory that validates the intended provider, audiences, claims and permissions, and provisions/maps the account correctly. An existing public mail client already trusted by Stalwart can be reused with an additional desktop callback URI. A separate provider is not required for the callback port. Do not reuse a confidential application's client secret in a desktop client.
 
 Configure the provider application for Authorization Code, S256 PKCE, no client secret, and refresh tokens. A registered redirect can be `http://127.0.0.1:54823/oauth/callback`, with `oauth_redirect_port = 54823` in NoriDrive. Use only the issuer's exact published URL, an administrator-provided public client ID and scopes that the provider grants and Stalwart accepts. The files scope is the default for conforming servers; external-provider claims/scopes must be designed on the server, not guessed in the desktop client.
 

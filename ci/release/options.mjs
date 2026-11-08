@@ -11,9 +11,9 @@ export const analyzer = ["@semantic-release/commit-analyzer", {
 export const notesOptions = {
   preset: "conventionalcommits",
   presetConfig: {
-    commitUrlFormat: "{{host}}/{{owner}}/{{repository}}/-/commit/{{hash}}",
-    issueUrlFormat: "{{host}}/{{owner}}/{{repository}}/-/issues/{{id}}",
-    compareUrlFormat: "{{host}}/{{owner}}/{{repository}}/-/compare/{{previousTag}}...{{currentTag}}",
+    commitUrlFormat: "{{host}}/{{owner}}/{{repository}}/commit/{{hash}}",
+    issueUrlFormat: "{{host}}/{{owner}}/{{repository}}/issues/{{id}}",
+    compareUrlFormat: "{{host}}/{{owner}}/{{repository}}/compare/{{previousTag}}...{{currentTag}}",
     types: [
     { type: "feat", section: "Features" }, { type: "fix", section: "Bug fixes" },
     { type: "perf", section: "Performance" }, { type: "refactor", section: "Refactoring" },
@@ -27,5 +27,5 @@ export const analysisPlugins = [analyzer, "./ci/release/notes.mjs"];
 export const options = {
   branches: ["main"],
   tagFormat: "v${version}",
-  ...(process.env.CI_PROJECT_URL ? { repositoryUrl: process.env.CI_PROJECT_URL + ".git" } : {}),
+  repositoryUrl: "https://github.com/yannickdreher/NoriDrive.git",
 };

@@ -1,6 +1,6 @@
 # NoriDrive
 
-Deutsch · [English](README.md)
+Deutsch · [English](README.md) · [Website](https://yannickdreher.github.io/NoriDrive/) · [Downloads](https://github.com/yannickdreher/NoriDrive/releases)
 
 JMAP-Dateisynchronisation für Windows und Linux mit gemeinsamem Rust-Kern. Windows verwendet ein eigenes **WinUI-3-/C#-Projekt**, Linux ein getrenntes **Qt-6-/C++-/QML-Projekt**. Die Oberfläche ist Deutsch/Englisch, Code und technische Diagnosen sind Englisch. Version 0.1 bleibt eine Preview.
 
@@ -41,7 +41,7 @@ sh scripts/build-linux.sh
 ./target/debug/noridrive-ui
 ```
 
-Merges nach `main` führen die Tests aus; anschließend plant semantic-release Version und Änderungsprotokoll. Eine serialisierte Unterpipeline baut Linux und die native Windows-App und veröffentlicht danach Tag, GitLab-Release und dauerhafte Binärdownloads. Der Windows-Job benötigt einen Runner mit Tag `windows`; bis dieser eingerichtet ist, wartet die Veröffentlichung auf diesen Job. Siehe [Releases](docs/releases.md).
+Pull Requests führen Linux- und native Windows-Prüfungen in GitHub Actions aus. Nach einem Merge in `main` plant semantic-release die Version, baut beide Plattformen und veröffentlicht einen GitHub-Release mit Änderungsnotizen, Downloads und Prüfsummen. Die bereitgestellten Windows-Runner benötigen keine eigene Runner-Installation. GitHub Pages veröffentlicht die deutsch/englische Website. Siehe [Releases](docs/releases.md).
 
 ## Verbinden
 
@@ -49,7 +49,7 @@ Unter Einstellungen Server und Benutzername eingeben. Vorgaben sind `https://jma
 
 Auf der Kontoseite speichert **Anmelden** die Eingaben vor der Authentifizierung. Das Remote-Ziel entsteht automatisch: Der lokale Ordner `C:\Users\yannick\Desktop` wird in den Remote-Ordner `Desktop` auf der obersten Ebene synchronisiert. Es gibt kein Remote-Ordnerfeld und keine Auswahl des Kontostammverzeichnisses. Vorhandene lokale Zustände bleiben an ihre ursprüngliche Remote-Ordner-ID gebunden. Verwendete ein älteres Profil einen anderen Namen, einen neuen lokalen Ordner wählen; den gespeicherten Zustand nicht löschen.
 
-Beim Umbenennen zu NoriDrive bleiben vorhandene Profilpfade, der Credential-Dienst und interne Zustands-/Sicherungsverzeichnisse erhalten. Bereits konfigurierte lokale und Remote-Ordner werden nicht verschoben oder umbenannt. Das GitLab-Repository heißt `noritec/noridrive`.
+Beim Umbenennen zu NoriDrive bleiben vorhandene Profilpfade, der Credential-Dienst und interne Zustands-/Sicherungsverzeichnisse erhalten. Bereits konfigurierte lokale und Remote-Ordner werden nicht verschoben oder umbenannt. Das Repository heißt [yannickdreher/NoriDrive](https://github.com/yannickdreher/NoriDrive).
 
 Ein eingerichtetes Konto setzt die Synchronisation beim Start von NoriDrive fort. Dafür gibt es keine separate Startoption. Die Browser-Authentifizierung verwendet gespeicherte Tokens; eine interaktive Browser-Anmeldung wird weiterhin nur über die Anmeldeaktion gestartet.
 

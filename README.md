@@ -1,6 +1,6 @@
 # NoriDrive
 
-English · [Deutsch](README.de.md)
+English · [Deutsch](README.de.md) · [Website](https://yannickdreher.github.io/NoriDrive/) · [Downloads](https://github.com/yannickdreher/NoriDrive/releases)
 
 A JMAP Files synchronization client for Windows and Linux. The shared synchronization engine is Rust. Windows has a dedicated **WinUI 3/C#** frontend; Linux has a separate **Qt 6/C++/QML** frontend. UI text is English and German; code and technical diagnostics are English. Version 0.1 remains a preview.
 
@@ -41,7 +41,7 @@ sh scripts/build-linux.sh
 ./target/debug/noridrive-ui
 ```
 
-Merges into `main` run tests, then semantic-release plans a version and changelog. A serialized child pipeline builds Linux and the native Windows app, then publishes the tag, GitLab release and permanent binary downloads. The Windows job requires a runner tagged `windows`; until it is configured, publication waits for that job. See [releases](docs/releases.md).
+Pull requests run Linux and native Windows checks on GitHub Actions. Merges into `main` then plan a semantic-release version, build both platforms and publish a GitHub release with change notes, binary downloads and checksums. Hosted Windows runners need no separate runner installation. GitHub Pages deploys the English/German website. See [releases](docs/releases.md).
 
 ## Connect
 
@@ -49,7 +49,7 @@ In settings, configure the JMAP server and username. Defaults are `https://jmap.
 
 On the Account page, **Sign in** saves the entered settings before authentication. The remote target is automatic: selecting `C:\Users\yannick\Desktop` synchronizes into the top-level remote folder `Desktop`. There is no remote-folder field or account-root selection. Existing local state remains bound to its original remote folder ID; if an older profile used a different name, choose a fresh local folder rather than deleting its state.
 
-The NoriDrive rename preserves the previous profile location, credential service and private state/recovery directory names. Existing configured local/remote folders are not moved or renamed. The GitLab repository is `noritec/noridrive`.
+The NoriDrive rename preserves the previous profile location, credential service and private state/recovery directory names. Existing configured local/remote folders are not moved or renamed. The repository is [yannickdreher/NoriDrive](https://github.com/yannickdreher/NoriDrive).
 
 A configured account resumes synchronization when NoriDrive starts. There is no separate startup-resume setting. Browser authentication reuses saved tokens; an interactive browser login still requires the user's sign-in action.
 

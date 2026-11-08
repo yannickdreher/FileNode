@@ -9,6 +9,7 @@
 #include <QQuickWindow>
 #include <QTimer>
 #include <QFile>
+#include <QIcon>
 #include <QJsonDocument>
 
 int main(int argc, char **argv) {
@@ -36,6 +37,7 @@ int main(int argc, char **argv) {
     engine.rootContext()->setContextProperty("startSettings", parser.isSet("settings"));
     engine.load(QUrl("qrc:/Main.qml"));
     if (engine.rootObjects().isEmpty()) return 1;
+    application.setWindowIcon(QIcon(":/drive.svg"));
     auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().first());
     backend.powerMonitor()->watchWindow(window);
     if (parser.isSet("self-test")) {

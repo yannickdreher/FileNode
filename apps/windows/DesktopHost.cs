@@ -5,6 +5,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics;
 
 namespace Noritec.NoriDrive.Windows;
@@ -72,7 +73,10 @@ internal sealed class DesktopHost
         root.RowDefinitions.Add(new() { Height = GridLength.Auto });
         var header = new StackPanel { Spacing = 10 };
         var title = new Grid(); title.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) }); title.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
-        title.Children.Add(new TextBlock { Text = "NoriDrive", FontSize = 22 });
+        var brand = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        brand.Children.Add(new Image { Source = new BitmapImage(new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "icon.png"))), Width = 28, Height = 28 });
+        brand.Children.Add(new TextBlock { Text = "NoriDrive", FontSize = 22 });
+        title.Children.Add(brand);
         var gear = new Button { Content = new SymbolIcon(Symbol.Setting) }; gear.Click += (_, _) => ShowSettings(); Grid.SetColumn(gear, 1); title.Children.Add(gear);
         header.Children.Add(title); header.Children.Add(account); header.Children.Add(summary); header.Children.Add(error);
         var scroll = new ScrollViewer { Content = activity, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; Grid.SetRow(scroll, 1);

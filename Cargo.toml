@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.98"
 description = "Cross-platform desktop synchronization for Stalwart JMAP Files"
-repository = "https://gitlab.example.com/noritec/noridrive"
+repository = "https://github.com/yannickdreher/NoriDrive"
 publish = false
 
 [features]
