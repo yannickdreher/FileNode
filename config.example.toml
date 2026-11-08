@@ -1,4 +1,4 @@
-# Copy to a separate profile and replace username and local_folder.
+# Copy to a separate profile and replace username and the selected folder paths.
 # Never store the app password in this file.
 language = "auto" # auto, en, de
 server = "https://jmap.example.com"
@@ -12,8 +12,6 @@ oauth_client_id = "" # Empty: public dynamic registration, if supported.
 oauth_scopes = "urn:ietf:params:oauth:scope:files offline_access"
 oauth_redirect_port = 0 # Ephemeral; use a fixed registered port for providers such as authentik.
 # account_id = "your-file-account-id" # Only needed when discovery is ambiguous.
-local_folder = "/home/user/FileNode" # Windows: 'C:\Users\user\FileNode'
-# The remote top-level folder automatically uses the local folder's name.
 interval_seconds = 30
 full_scan_seconds = 900
 # Payload limits in KiB/s (1024 bytes/s); zero means unlimited.
@@ -28,3 +26,12 @@ max_delete_count = 20
 max_delete_percent = 25
 max_file_bytes = 1073741824
 device_name = "Desktop"
+
+# Paths inside your home keep their relative hierarchy on the server.
+# Other locations use the selected folder's own name. Overlapping roots are rejected.
+[[sync_folders]]
+local_folder = "/home/user/Desktop" # Windows: 'C:\Users\user\Desktop'
+
+[[sync_folders]]
+local_folder = "/home/user/Documents/Büro" # Windows: 'C:\Users\user\Documents\Büro'
+# remote_path is derived automatically when omitted; it is not a user-facing option.

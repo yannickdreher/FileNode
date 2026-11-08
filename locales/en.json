@@ -101,5 +101,14 @@
   "action.signin": "Sign in",
   "settings.authentication": "Sign-in method",
   "settings.auth_password": "App password",
-  "settings.auth_browser": "Browser / single sign-on"
+  "settings.auth_browser": "Browser / single sign-on",
+  "settings.folders": "Sync folders",
+  "settings.folders_hint": "Folders inside your home keep their relative path on the server. Other folders use their own name.",
+  "settings.add_folder": "Add folder",
+  "settings.remove_folder": "Stop sync",
+  "settings.no_folders": "Choose the folders you want to synchronize.",
+  "settings.folder_target": "On server",
+  "settings.stop_hint": "Stopping sync keeps all local and remote files. Pause synchronization before changing this list.",
+  "status.folder_error": "Some folders need attention",
+  "log.folder_error": "Folder {folder}: {error}"
 }

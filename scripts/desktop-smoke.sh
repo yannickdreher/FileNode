@@ -31,6 +31,20 @@ sleep 1
 kill -0 "$wm_pid"
 kill -0 "$host_pid"
 profile=$(mktemp -d)
+mkdir -p "$profile/Desktop" "$profile/Documents/Büro"
+cat > "$profile/profile.toml" <<EOF
+username = ""
+language = "en"
+autostart = false
+[[sync_folders]]
+local_folder = '$profile/Desktop'
+[[sync_folders]]
+local_folder = '$profile/Documents/Büro'
+EOF
+"${DRIVE_UI:-${CARGO_TARGET_DIR:-target}/release/filenode-ui}" \
+  --core "${DRIVE_CORE:-${CARGO_TARGET_DIR:-target}/release/filenode}" \
+  --config "$profile/profile.toml" --no-tray --self-test artifacts/linux-folders >/tmp/drive-smoke.log 2>&1
+python3 -c 'import json; report = json.load(open("artifacts/linux-folders/qt-smoke.json")); assert report["ready"] and report["folders"] == 2, report'
 "${DRIVE_UI:-${CARGO_TARGET_DIR:-target}/release/filenode-ui}" \
   --core "${DRIVE_CORE:-${CARGO_TARGET_DIR:-target}/release/filenode}" \
   --config "$profile/profile.toml" >/tmp/drive-smoke.log 2>&1 &

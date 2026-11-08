@@ -28,6 +28,7 @@ internal sealed class DesktopHost
     private TextBlock? pageError;
     private Button? accountAction;
     private Func<string>? accountActionLabel;
+    private Action? refreshFolders;
     public DesktopHost()
     {
         core = new CoreClient(status.DispatcherQueue);
@@ -82,8 +83,8 @@ internal sealed class DesktopHost
         var scroll = new ScrollViewer { Content = activity, VerticalScrollBarVisibility = ScrollBarVisibility.Auto }; Grid.SetRow(scroll, 1);
         var footer = new StackPanel { Spacing = 8 };
         var links = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        links.Children.Add(Button("action.open", () => Open(core.Text("local_folder"))));
-        links.Children.Add(Button("action.online", OpenOnline)); links.Children.Add(Button("action.recovery", () => Open(Path.Combine(core.Text("local_folder"), ".filenode", "history"))));
+        links.Children.Add(Button("action.open", OpenSelectedFolders));
+        links.Children.Add(Button("action.online", OpenOnline)); links.Children.Add(Button("action.recovery", OpenSelectedRecovery));
         footer.Children.Add(links);
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
         toggle.Click += Toggle; actions.Children.Add(toggle);
@@ -95,6 +96,7 @@ internal sealed class DesktopHost
     private void Toggle(object sender, RoutedEventArgs args) => _ = core.Send(core.Running ? "pause" : "connect");
     private void Update(bool configChanged)
     {
+        if (configChanged) refreshFolders?.Invoke();
         if (renderedLanguage != core.Language) { toggle.Click -= Toggle; BuildStatus(); if (settings is not null) BuildSettings(); }
         account.Text = core.Text("username", core.T("account.not_connected"));
         summary.Text = core.T(core.StatusKey); error.Text = core.Error == "" ? "" : core.T("error.summary");
@@ -139,7 +141,7 @@ internal sealed class DesktopHost
             case "settings": ShowSettings(); break;
             case "toggle": _ = core.Send(core.Running ? "pause" : "connect"); break;
             case "check": _ = core.Send("check"); break;
-            case "folder": Open(core.Text("local_folder")); break;
+            case "folder": OpenSelectedFolders(); break;
             case "quit": _ = Quit(); break;
         }
     }
@@ -183,6 +185,7 @@ internal sealed class DesktopHost
     }
     private void ShowPage(int index, string title)
     {
+        refreshFolders = null;
         pausedControls.Clear(); accountAction = null; accountActionLabel = null;
         var panel = new StackPanel { Spacing = 18, Margin = new Thickness(28), MaxWidth = 760, HorizontalAlignment = HorizontalAlignment.Stretch };
         panel.Children.Add(Label(title, 28));
@@ -208,13 +211,73 @@ internal sealed class DesktopHost
     private void SyncPage(StackPanel panel)
     {
         panel.Children.Add(Label("settings.sync_hint"));
-        var folder = Field(panel, "settings.local", "local_folder");
+        panel.Children.Add(Label("settings.folders", 20));
+        panel.Children.Add(Label("settings.folders_hint"));
+        var rows = new StackPanel { Spacing = 12 };
+        var folderControls = new List<Control>();
+        panel.Children.Add(rows);
+        refreshFolders = () =>
+        {
+            foreach (var control in folderControls) pausedControls.Remove(control);
+            folderControls.Clear();
+            rows.Children.Clear();
+            var folders = core.Config["sync_folders"] as JsonArray ?? [];
+            if (folders.Count == 0) rows.Children.Add(Label("settings.no_folders"));
+            for (int i = 0; i < folders.Count; i++)
+            {
+                int selected = i;
+                var item = folders[i]!;
+                var path = item["local_folder"]!.ToString();
+                var content = new StackPanel { Spacing = 8 };
+                content.Children.Add(new TextBlock { Text = path, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
+                content.Children.Add(new TextBlock { Text = core.T("settings.folder_target") + ": /" + item["remote_path"], Opacity = .7, TextWrapping = TextWrapping.Wrap });
+                var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+                actions.Children.Add(Button("action.open", () => Open(path)));
+                actions.Children.Add(Button("action.recovery", () => Open(Path.Combine(path, ".filenode", "history"))));
+                var remove = Button("settings.remove_folder", () => { var next = (core.Config["sync_folders"] as JsonArray ?? []).DeepClone().AsArray(); next.RemoveAt(selected); _ = core.Apply(new() { ["sync_folders"] = next }); });
+                remove.IsEnabled = !core.Running;
+                pausedControls.Add(remove); folderControls.Add(remove); actions.Children.Add(remove); content.Children.Add(actions);
+                rows.Children.Add(new Border { Child = content, Padding = new Thickness(16), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(8), BorderBrush = new SolidColorBrush(Microsoft.UI.Colors.Gray) });
+            }
+        };
+        refreshFolders();
+        var add = Button("settings.add_folder", () => _ = AddFolder());
+        add.IsEnabled = !core.Running; pausedControls.Add(add); panel.Children.Add(add);
+        panel.Children.Add(Label("settings.stop_hint"));
         var deletes = new ToggleSwitch { Header = core.T("settings.deletes"), IsOn = core.Flag("propagate_deletes"), IsEnabled = !core.Running }; panel.Children.Add(deletes); pausedControls.Add(deletes);
         panel.Children.Add(Label("settings.bandwidth", 20)); Rate(panel, "settings.download_limit", "download_limit_kib"); Rate(panel, "settings.upload_limit", "upload_limit_kib");
         Switch(panel, "settings.pause_power", "pause_on_power_saver", true);
-        var save = Button("settings.save", () => _ = core.Apply(new() { ["local_folder"] = folder.Text, ["propagate_deletes"] = deletes.IsOn }));
+        var save = Button("settings.save", () => _ = core.Apply(new() { ["propagate_deletes"] = deletes.IsOn }));
         save.IsEnabled = !core.Running; panel.Children.Add(save); pausedControls.Add(save);
         if (core.Running) panel.Children.Add(Label("settings.pause_hint"));
+    }
+    private async Task AddFolder()
+    {
+        if (core.Running || settings is null) return;
+        try
+        {
+            var picker = new global::Windows.Storage.Pickers.FolderPicker();
+            picker.FileTypeFilter.Add("*");
+            WinRT.Interop.InitializeWithWindow.Initialize(picker, WinRT.Interop.WindowNative.GetWindowHandle(settings));
+            var folder = await picker.PickSingleFolderAsync();
+            if (folder is null) return;
+            var next = (core.Config["sync_folders"] as JsonArray ?? []).DeepClone().AsArray();
+            next.Add(new JsonObject { ["local_folder"] = folder.Path, ["remote_path"] = "" });
+            await core.Apply(new() { ["sync_folders"] = next });
+        }
+        catch (Exception exception) { if (pageError is not null) pageError.Text = exception.Message; }
+    }
+    private void OpenSelectedFolders()
+    {
+        var folders = core.Config["sync_folders"] as JsonArray ?? [];
+        if (folders.Count == 1) Open(folders[0]!["local_folder"]!.ToString());
+        else { ShowSettings(); if (navigation is not null) navigation.SelectedItem = navigation.MenuItems[0]; }
+    }
+    private void OpenSelectedRecovery()
+    {
+        var folders = core.Config["sync_folders"] as JsonArray ?? [];
+        if (folders.Count == 1) Open(Path.Combine(folders[0]!["local_folder"]!.ToString(), ".filenode", "history"));
+        else { ShowSettings(); if (navigation is not null) navigation.SelectedItem = navigation.MenuItems[0]; }
     }
     private void Rate(StackPanel panel, string label, string key)
     {
@@ -300,6 +363,21 @@ internal sealed class DesktopHost
         if (!core.Ready || core.Error != "") throw new InvalidOperationException("UI smoke test worker did not become ready: " + core.Error);
         App.SelfTestProgress("open status and settings");
         ShowStatus(); ShowSettings();
+        async Task WaitForFolders(int count)
+        {
+            var limit = DateTime.UtcNow.AddSeconds(5);
+            while ((core.Config["sync_folders"]?.AsArray().Count != count || core.Error != "") && DateTime.UtcNow < limit) await Task.Delay(50);
+            if (core.Config["sync_folders"]?.AsArray().Count != count || core.Error != "") throw new InvalidOperationException("Folder configuration failed: " + core.Error);
+        }
+        var first = Path.GetFullPath(Path.Combine(directory, "folders", "Desktop"));
+        var second = Path.GetFullPath(Path.Combine(directory, "folders", "Documents", "Büro"));
+        Directory.CreateDirectory(first); Directory.CreateDirectory(second);
+        File.WriteAllText(Path.Combine(first, "keep.txt"), "UI smoke fixture");
+        await core.Apply(new() { ["sync_folders"] = new JsonArray(
+            new JsonObject { ["local_folder"] = first, ["remote_path"] = "" },
+            new JsonObject { ["local_folder"] = second, ["remote_path"] = "" }) });
+        await WaitForFolders(2);
+        if (core.Config["sync_folders"]!.AsArray().Any(folder => string.IsNullOrEmpty(folder!["remote_path"]!.ToString()))) throw new InvalidOperationException("Server folder paths were not resolved");
         var keys = new[] { "settings.sync", "settings.account", "settings.general", "settings.about" };
         foreach (var language in new[] { "en", "de" })
         {
@@ -314,8 +392,13 @@ internal sealed class DesktopHost
                 (settings!.Content as FrameworkElement)?.UpdateLayout();
             }
         }
+        App.SelfTestProgress("stop one folder without deleting files");
+        var remaining = core.Config["sync_folders"]!.DeepClone().AsArray(); remaining.RemoveAt(0);
+        await core.Apply(new() { ["sync_folders"] = remaining });
+        await WaitForFolders(1);
+        if (!File.Exists(Path.Combine(first, "keep.txt")) || !Directory.Exists(second)) throw new InvalidOperationException("Stopping sync removed a selected folder");
         if (core.Running) throw new InvalidOperationException("Offline UI smoke test unexpectedly started synchronization");
-        File.WriteAllText(Path.Combine(directory, "ui-smoke.json"), "{\"passed\":true,\"pages\":4,\"languages\":2}");
+        File.WriteAllText(Path.Combine(directory, "ui-smoke.json"), "{\"passed\":true,\"pages\":4,\"languages\":2,\"folders\":2,\"stopPreservesFiles\":true}");
         App.SelfTestProgress("quit");
         await Quit();
     }

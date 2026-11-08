@@ -105,10 +105,11 @@ internal sealed class CoreClient : IAsyncDisposable
         switch (type)
         {
             case "ready":
-                if (message["protocol"]?.GetValue<int>() != 2) { Error = "Incompatible Rust worker protocol"; break; }
+                if (message["protocol"]?.GetValue<int>() != 3) { Error = "Incompatible Rust worker protocol"; break; }
                 Ready = true;
                 break;
             case "configured":
+                Error = "";
                 if (connectAfterSave) { var password = pendingPassword; pendingPassword = null; connectAfterSave = false; _ = Send("connect", new() { ["password"] = password ?? "", ["interactive"] = pendingInteractive }); pendingInteractive = false; }
                 break;
             case "open_browser":
@@ -122,7 +123,7 @@ internal sealed class CoreClient : IAsyncDisposable
             case "status": StatusKey = message["key"]!.ToString(); break;
             case "report":
                 Error = ""; var report = message["report"]!;
-                StatusKey = report["deferred"]!.GetValue<int>() > 0 ? "status.deferred" : report["blocked"]!.GetValue<int>() > 0 ? "status.deletions_blocked" : "status.current"; break;
+                StatusKey = report["failed_folders"]?.GetValue<int>() > 0 ? "status.folder_error" : report["deferred"]!.GetValue<int>() > 0 ? "status.deferred" : report["blocked"]!.GetValue<int>() > 0 ? "status.deletions_blocked" : "status.current"; break;
             case "activity":
                 message["time"] = DateTimeOffset.Now.ToString("g"); Activity.Insert(0, message);
                 if (Activity.Count > 100) Activity.RemoveAt(100); break;

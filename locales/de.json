@@ -101,5 +101,14 @@
   "action.signin": "Anmelden",
   "settings.authentication": "Anmeldemethode",
   "settings.auth_password": "App-Passwort",
-  "settings.auth_browser": "Browser / Single Sign-on"
+  "settings.auth_browser": "Browser / Single Sign-on",
+  "settings.folders": "Synchronisierte Ordner",
+  "settings.folders_hint": "Ordner im Benutzerverzeichnis behalten ihren relativen Pfad auf dem Server. Andere Ordner verwenden ihren eigenen Namen.",
+  "settings.add_folder": "Ordner hinzufügen",
+  "settings.remove_folder": "Synchronisation beenden",
+  "settings.no_folders": "Wähle die Ordner aus, die du synchronisieren möchtest.",
+  "settings.folder_target": "Auf dem Server",
+  "settings.stop_hint": "Beim Beenden bleiben alle lokalen und entfernten Dateien erhalten. Pausiere die Synchronisation vor Änderungen an dieser Liste.",
+  "status.folder_error": "Einige Ordner benötigen Aufmerksamkeit",
+  "log.folder_error": "Ordner {folder}: {error}"
 }

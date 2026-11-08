@@ -2,7 +2,7 @@
 
 Deutsch · [English](README.md) · [Website](https://yannickdreher.github.io/FileNode/) · [Downloads](https://github.com/yannickdreher/FileNode/releases)
 
-JMAP-Dateisynchronisation für Windows und Linux mit gemeinsamem Rust-Kern. Windows verwendet ein eigenes **WinUI-3-/C#-Projekt**, Linux ein getrenntes **Qt-6-/C++-/QML-Projekt**. Die Oberfläche ist Deutsch/Englisch, Code und technische Diagnosen sind Englisch. Version 0.1 bleibt eine Preview.
+JMAP-Dateisynchronisation für Windows und Linux mit gemeinsamem Rust-Kern. Windows verwendet ein eigenes **WinUI-3-/C#-Projekt**, Linux ein getrenntes **Qt-6-/C++-/QML-Projekt**. Die Oberfläche ist Deutsch/Englisch, Code und technische Diagnosen sind Englisch. Die Versionen 0.x sind Vorabversionen.
 
 ## Hintergrundbetrieb
 
@@ -12,6 +12,7 @@ Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regel
 
 ## Funktionen
 
+- Mehrere lokale Ordner pro Konto, automatische Serverpfade relativ zum Benutzerverzeichnis und getrennte Zustände/Wiederholungen je Ordner.
 - Vollständige lokale Dateien, bidirektionaler Abgleich, SHA-256-Inhaltsvergleich, SQLite-Dreiwege-Abgleich und dauerhaftes Journal.
 - Bei Konflikten bleiben beide Fassungen erhalten. Remote-Umbenennungen nutzen stabile IDs; eindeutige lokale Dateiumbenennungen erhalten die Server-Identität.
 - Löschweitergabe erst nach Aktivierung, mit Schutz vor Massenlöschungen. Vorherige Fassungen liegen lokal in `.filenode/history` und remote in `.filenode-trash`. Kein `FileNode/destroy`.
@@ -45,9 +46,9 @@ Pull Requests führen Linux- und native Windows-Prüfungen in GitHub Actions aus
 
 ## Verbinden
 
-Unter Einstellungen Server und Benutzername eingeben. Vorgaben sind `https://jmap.example.com` für JMAP und `https://mail.example.com` für den Webclient. Als Anmeldemethode **Browser / Single Sign-on** für OAuth Authorization Code mit PKCE oder **App-Passwort** auswählen und anschließend **Anmelden** drücken. Einen eigenen lokalen Ordner wählen, die Löschweitergabe zunächst ausgeschaltet lassen. Pro Konto/Profil einen getrennten Ordner verwenden. Die [Browser-Anmeldedokumentation](docs/browser-authentication.md) beschreibt Server-Voraussetzungen und externe OIDC-Anbieter.
+Unter **Synchronisation und Wiederherstellung** die lokalen Ordner hinzufügen. Unter **Konto** Server und Benutzername eingeben. Vorgaben sind `https://jmap.example.com` für JMAP und `https://mail.example.com` für den Webclient. Als Anmeldemethode **Browser / Single Sign-on** für OAuth Authorization Code mit PKCE oder **App-Passwort** auswählen und anschließend **Anmelden** drücken. Die Löschweitergabe zunächst ausgeschaltet lassen. Die [Browser-Anmeldedokumentation](docs/browser-authentication.md) beschreibt Server-Voraussetzungen und externe OIDC-Anbieter.
 
-Auf der Kontoseite speichert **Anmelden** die Eingaben vor der Authentifizierung. Das Remote-Ziel entsteht automatisch: Der lokale Ordner `C:\Users\yannick\Desktop` wird in den Remote-Ordner `Desktop` auf der obersten Ebene synchronisiert. Es gibt kein Remote-Ordnerfeld und keine Auswahl des Kontostammverzeichnisses. Vorhandene lokale Zustände bleiben an ihre ursprüngliche Remote-Ordner-ID gebunden. Verwendete ein älteres Profil einen anderen Namen, einen neuen lokalen Ordner wählen; den gespeicherten Zustand nicht löschen.
+**Anmelden** speichert die Eingaben vor der Authentifizierung. Serverpfade entstehen relativ zum Benutzerverzeichnis: `C:\Users\Yannick\Desktop` wird zu `/Desktop`, `C:\Users\Yannick\Documents\Büro` zu `/Documents/Büro`. Außerhalb des Benutzerverzeichnisses wird der letzte Ordnername verwendet. Überlappende lokale oder serverseitige Auswahlen werden abgelehnt. Vor dem Hinzufügen oder Beenden eines Ordners pausieren. **Synchronisation beenden** erhält lokale und serverseitige Dateien. Siehe [Ordnerauswahl](docs/folder-selection.md).
 
 
 Ein eingerichtetes Konto setzt die Synchronisation beim Start von FileNode fort. Dafür gibt es keine separate Startoption. Die Browser-Authentifizierung verwendet gespeicherte Tokens; eine interaktive Browser-Anmeldung wird weiterhin nur über die Anmeldeaktion gestartet.
@@ -59,7 +60,7 @@ filenode --headless --config /absolut/profil.toml --dry-run
 filenode --headless --config /absolut/profil.toml --once --language de
 ```
 
-Headless muss der absolute lokale Ordner bereits existieren. Browser-Profile verwenden und erneuern die zuvor in der Desktop-App eingerichtete Sitzung ohne Browserstart. App-Passwort-Profile verwenden den OS-Schlüsselspeicher oder `FILENODE_PASSWORD` aus einem Secret Manager; `FILENODE_PASSWORD` bleibt kompatibel. Keine Passwörter in TOML oder Kommandozeilenargumente schreiben. `--dry-run` kann interne Metadaten anlegen, verändert aber keine Nutzdateien oder Remote-Objekte. `--once` wartet zunächst auf stabile Dateien und liefert nach zweimal der eingestellten Wartezeit plus 30 Sekunden einen Fehler, falls sie weiterhin gesperrt oder in Änderung sind. Die Desktop-App versucht es weiter. Headless abonniert keine Desktop-Energieereignisse.
+Headless werden absolute Ordnerpfade benötigt. Browser-Profile verwenden und erneuern die zuvor in der Desktop-App eingerichtete Sitzung ohne Browserstart. App-Passwort-Profile verwenden den OS-Schlüsselspeicher oder `FILENODE_PASSWORD` aus einem Secret Manager. Keine Passwörter in TOML oder Kommandozeilenargumente schreiben. `--dry-run` liefert einen Plan pro Auswahl und kann interne Metadaten anlegen, verändert aber keine Nutzdateien oder Remote-Objekte. `--once` meldet einen Fehler, sobald ein ausgewählter Ordner fehlschlägt. `--once` wartet zunächst auf stabile Dateien und liefert nach zweimal der eingestellten Wartezeit plus 30 Sekunden einen Fehler, falls sie weiterhin gesperrt oder in Änderung sind. Die Desktop-App versucht es weiter. Headless abonniert keine Desktop-Energieereignisse.
 
 ## Grenzen und Wiederherstellung
 

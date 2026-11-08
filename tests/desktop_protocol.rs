@@ -10,8 +10,7 @@ use std::{
 fn worker_versions_protocol_validates_settings_and_applies_power_policy() {
     let directory = tempfile::tempdir().unwrap();
     let profile = directory.path().join("profile.toml");
-    // Legacy profiles remain readable, but the removed startup option must not
-    // return in worker messages or in the next saved configuration.
+    // Removed options are not part of the public configuration contract.
     std::fs::write(
         &profile,
         "auto_connect = false\nremote_folder = \"Legacy folder\"\nusername = \"\"\n",
@@ -51,9 +50,11 @@ fn worker_versions_protocol_validates_settings_and_applies_power_policy() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     assert_eq!(events[0]["event"], "ready");
-    assert_eq!(events[0]["protocol"], 2);
+    assert_eq!(events[0]["protocol"], 3);
     assert!(events[0]["config"].get("auto_connect").is_none());
     assert!(events[0]["config"].get("remote_folder").is_none());
+    assert!(events[0]["config"].get("local_folder").is_none());
+    assert_eq!(events[0]["config"]["sync_folders"], json!([]));
     assert_eq!(events[1]["event"], "error");
     assert_eq!(events[2]["event"], "configured");
     assert_eq!(events[2]["config"]["upload_limit_kib"], 128);
@@ -67,4 +68,5 @@ fn worker_versions_protocol_validates_settings_and_applies_power_policy() {
     assert!(fields.get("refresh_token").is_none());
     assert!(fields.get("auto_connect").is_none());
     assert!(fields.get("remote_folder").is_none());
+    assert!(fields.get("local_folder").is_none());
 }

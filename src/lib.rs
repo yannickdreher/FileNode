@@ -2,6 +2,7 @@ pub mod auth;
 pub mod config;
 pub mod engine;
 pub mod filesystem;
+pub mod group;
 pub mod i18n;
 pub mod jmap;
 pub mod model;

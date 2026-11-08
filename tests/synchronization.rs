@@ -4,6 +4,237 @@ use anyhow::{bail, Result};
 use filenode::{config::Config, engine, filesystem, jmap::Remote, model::*, store::Store};
 use std::{collections::HashMap, fs, path::Path, sync::atomic::AtomicBool};
 
+fn multiple_folder_config(home: &Path) -> Config {
+    let selected = [home.join("Desktop"), home.join("Documents").join("Büro")];
+    for path in &selected {
+        fs::create_dir_all(path).unwrap();
+    }
+    Config {
+        username: "test@example.org".into(),
+        file_settle_seconds: 0,
+        sync_folders: Some(
+            selected
+                .into_iter()
+                .map(|local_folder| filenode::config::SyncFolder {
+                    remote_path: Config::derive_remote_path(&local_folder, home).unwrap(),
+                    local_folder,
+                })
+                .collect(),
+        ),
+        ..Config::default()
+    }
+}
+
+#[test]
+fn multiple_folders_preserve_home_relative_unicode_paths_and_stop_without_deleting() {
+    use filenode::group::SyncGroup;
+    let home = tempfile::tempdir().unwrap();
+    let mut config = multiple_folder_config(home.path());
+    let folders = config.sync_folders.as_ref().unwrap().clone();
+    assert_eq!(folders[0].remote_path, "Desktop");
+    assert_eq!(folders[1].remote_path, "Documents/Büro");
+    fs::write(folders[0].local_folder.join("same.txt"), "desktop original").unwrap();
+    fs::write(folders[1].local_folder.join("same.txt"), "office original").unwrap();
+    let mut server = Server::default();
+    let mut state = server.state();
+    let documents = server
+        .create("Documents", None, Kind::Directory, None, 0, &mut state)
+        .unwrap();
+    let sibling = server
+        .create(
+            "Unselected",
+            Some(&documents.id),
+            Kind::Directory,
+            None,
+            0,
+            &mut state,
+        )
+        .unwrap();
+    let mut group = SyncGroup::new(&config).unwrap();
+    assert_eq!(
+        group
+            .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+            .unwrap()
+            .uploaded,
+        2
+    );
+    let snapshot = server.snapshot(None).unwrap();
+    let desktop = engine::find_folder_path(&snapshot, "Desktop")
+        .unwrap()
+        .unwrap();
+    let office = engine::find_folder_path(&snapshot, "Documents/Büro")
+        .unwrap()
+        .unwrap();
+    assert!(server
+        .nodes
+        .iter()
+        .any(|node| node.id == sibling.id && node.parent_id.as_ref() == Some(&documents.id)));
+    assert!(!server
+        .nodes
+        .iter()
+        .any(|node| node.name == "Büro" && node.parent_id.is_none()));
+    let desktop_file = server
+        .nodes
+        .iter()
+        .find(|node| node.parent_id.as_ref() == Some(&desktop) && node.name == "same.txt")
+        .unwrap()
+        .id
+        .clone();
+    let office_file = server
+        .nodes
+        .iter()
+        .find(|node| node.parent_id.as_ref() == Some(&office) && node.name == "same.txt")
+        .unwrap()
+        .id
+        .clone();
+    assert_ne!(desktop_file, office_file);
+    drop(group);
+    config.sync_folders.as_mut().unwrap().remove(0);
+    fs::write(
+        folders[0].local_folder.join("same.txt"),
+        "unsynchronized local edit",
+    )
+    .unwrap();
+    fs::write(folders[1].local_folder.join("same.txt"), "office update").unwrap();
+    let mut group = SyncGroup::new(&config).unwrap();
+    assert_eq!(
+        group
+            .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+            .unwrap()
+            .failed_folders,
+        0
+    );
+    let node = server
+        .nodes
+        .iter()
+        .find(|node| node.id == desktop_file)
+        .unwrap();
+    assert_eq!(
+        server.blobs[node.blob_id.as_ref().unwrap()],
+        b"desktop original"
+    );
+    assert_eq!(
+        fs::read(folders[0].local_folder.join("same.txt")).unwrap(),
+        b"unsynchronized local edit"
+    );
+    let node = server
+        .nodes
+        .iter()
+        .find(|node| node.id == office_file)
+        .unwrap();
+    assert_eq!(
+        server.blobs[node.blob_id.as_ref().unwrap()],
+        b"office update"
+    );
+}
+
+#[test]
+fn an_unavailable_folder_does_not_recreate_local_roots_or_block_healthy_folders() {
+    use filenode::{config::SyncFolder, group::SyncGroup};
+    let home = tempfile::tempdir().unwrap();
+    let mut config = multiple_folder_config(home.path());
+    config.sync_folders.as_mut().unwrap().truncate(1);
+    let missing = home.path().join("Offline");
+    config.sync_folders.as_mut().unwrap().insert(
+        0,
+        SyncFolder {
+            local_folder: missing.clone(),
+            remote_path: "Offline".into(),
+        },
+    );
+    fs::write(home.path().join("Desktop/healthy.txt"), "available").unwrap();
+    let mut server = Server::default();
+    let mut group = SyncGroup::new(&config).unwrap();
+    let report = group
+        .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+        .unwrap();
+    assert_eq!(report.failed_folders, 1);
+    assert_eq!(report.uploaded, 1);
+    assert!(!missing.exists());
+    assert!(!server.nodes.iter().any(|node| node.name == "Offline"));
+    fs::create_dir(&missing).unwrap();
+    fs::write(missing.join("returned.txt"), "back online").unwrap();
+    group.invalidate();
+    let report = group
+        .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+        .unwrap();
+    assert_eq!(report.failed_folders, 0);
+    assert_eq!(report.uploaded, 1);
+}
+
+#[test]
+fn multiple_roots_reject_overlaps_case_collisions_and_unsafe_remote_paths() {
+    let home = tempfile::tempdir().unwrap();
+    let mut config = multiple_folder_config(home.path());
+    let original = config.sync_folders.as_ref().unwrap().clone();
+    config.sync_folders.as_mut().unwrap()[1].local_folder = home.path().join("Desktop/nested");
+    fs::create_dir_all(home.path().join("Desktop/nested")).unwrap();
+    assert!(config.validate().is_err());
+    config.sync_folders = Some(original.clone());
+    config.sync_folders.as_mut().unwrap()[1].remote_path = "desktop".into();
+    assert!(config.validate().is_err());
+    config.sync_folders = Some(original);
+    config.sync_folders.as_mut().unwrap()[1].remote_path = "Desktop/subfolder".into();
+    assert!(config.validate().is_err());
+    for invalid in [
+        "../Desktop",
+        "/Desktop",
+        "Documents//Büro",
+        "Documents/../Büro",
+        "Documents\\Büro",
+        ".filenode/history",
+    ] {
+        assert!(Config::validate_remote_path(invalid).is_err(), "{invalid}");
+    }
+    assert!(Config::derive_remote_path(home.path(), home.path()).is_err());
+    let outside = tempfile::tempdir().unwrap();
+    assert_eq!(
+        Config::derive_remote_path(outside.path(), home.path()).unwrap(),
+        outside.path().file_name().unwrap().to_str().unwrap()
+    );
+    assert!(!home
+        .path()
+        .join("Desktop")
+        .join(filesystem::PRIVATE_DIR)
+        .exists());
+}
+
+#[test]
+fn multi_folder_power_pause_blocks_all_scans_and_state_creation() {
+    use filenode::{
+        group::SyncGroup,
+        runtime::{Policy, PowerState, Scope},
+    };
+    use std::sync::Arc;
+    let home = tempfile::tempdir().unwrap();
+    let config = multiple_folder_config(home.path());
+    fs::write(home.path().join("Desktop/a.txt"), "one").unwrap();
+    let power = Arc::new(PowerState::default());
+    let _scope = Scope::enter(Policy::new(
+        &config,
+        Arc::new(AtomicBool::new(false)),
+        power.clone(),
+    ));
+    let mut group = SyncGroup::new(&config).unwrap();
+    let mut server = Server::default();
+    power.set(true, false);
+    assert!(group
+        .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+        .is_err());
+    assert_eq!(server.writes, 0);
+    for folder in config.sync_folders.as_ref().unwrap() {
+        assert!(!folder.local_folder.join(filesystem::PRIVATE_DIR).exists());
+    }
+    power.set(false, false);
+    assert_eq!(
+        group
+            .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+            .unwrap()
+            .uploaded,
+        1
+    );
+}
+
 #[test]
 fn locked_file_is_deferred_without_deletion_while_other_files_sync() {
     let mut f = Fixture::new();

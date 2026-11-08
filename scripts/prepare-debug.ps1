@@ -11,9 +11,10 @@ language = "en"
 server = "https://jmap.example.com"
 web_url = "https://mail.example.com"
 username = ""
-local_folder = '$driveLocal'
 propagate_deletes = false
 autostart = false
+[[sync_folders]]
+local_folder = '$driveLocal'
 "@
     [System.IO.File]::WriteAllText($driveProfile, $driveContent, [System.Text.UTF8Encoding]::new($false))
 }

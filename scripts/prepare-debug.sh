@@ -9,9 +9,10 @@ language = "en"
 server = "https://jmap.example.com"
 web_url = "https://mail.example.com"
 username = ""
-local_folder = '$project/.dev/files'
 propagate_deletes = false
 autostart = false
+[[sync_folders]]
+local_folder = '$project/.dev/files'
 EOF
 fi
 printf 'Debug profile: %s\n' "$project/.dev/profile.toml"

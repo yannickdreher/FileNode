@@ -81,7 +81,6 @@ ApplicationWindow {
         function save(connectAccount) {
             let browser = authMode.currentIndex === 1
             App.apply({ server: server.text, web_url: web.text, username: username.text,
-                local_folder: localFolder.text,
                 propagate_deletes: deletes.checked, interval_seconds: interval.value,
                 full_scan_seconds: verification.value,
                 auth_mode: browser ? "browser" : "app_password", oauth_issuer:issuer.text,
@@ -113,13 +112,30 @@ ApplicationWindow {
                         ColumnLayout {
                             spacing: 16
                             Label { text: statusWindow.t("settings.sync_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            GroupBox {
-                                title: statusWindow.t("settings.local"); Layout.fillWidth: true
-                                RowLayout { anchors.fill: parent
-                                    TextField { id: localFolder; text: App.config.local_folder || ""; enabled: !App.running; Layout.fillWidth: true }
-                                    Button { text: "…"; enabled: !App.running; onClicked: folderDialog.open() }
+                            Label { text: statusWindow.t("settings.folders"); font.pointSize: 16 }
+                            Label { text: statusWindow.t("settings.folders_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Label { visible: (App.config.sync_folders || []).length === 0; text: statusWindow.t("settings.no_folders"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Repeater {
+                                model: App.config.sync_folders || []
+                                GroupBox {
+                                    required property var modelData
+                                    required property int index
+                                    Layout.fillWidth: true
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        Label { text: modelData.local_folder; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        Label { text: statusWindow.t("settings.folder_target") + ": /" + modelData.remote_path; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        Flow {
+                                            Layout.fillWidth: true; spacing: 8
+                                            Button { text: statusWindow.t("action.open"); onClicked: App.openPath(modelData.local_folder) }
+                                            Button { text: statusWindow.t("action.recovery"); onClicked: App.openPath(modelData.local_folder + "/.filenode/history") }
+                                            Button { text: statusWindow.t("settings.remove_folder"); enabled: !App.running; onClicked: { let next = App.config.sync_folders.slice(); next.splice(index, 1); App.apply({sync_folders: next}) } }
+                                        }
+                                    }
                                 }
                             }
+                            Button { text: statusWindow.t("settings.add_folder"); enabled: !App.running; onClicked: folderDialog.open() }
+                            Label { text: statusWindow.t("settings.stop_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Switch { id: deletes; text: statusWindow.t("settings.deletes"); checked: App.config.propagate_deletes || false; enabled: !App.running; Layout.fillWidth: true }
                             GroupBox { title: statusWindow.t("settings.bandwidth"); Layout.fillWidth: true
                                 ColumnLayout { anchors.fill: parent
@@ -198,12 +214,13 @@ ApplicationWindow {
                 }
             }
         }
-        FolderDialog { id: folderDialog; onAccepted: localFolder.text = App.localPath(selectedFolder) }
+        FolderDialog { id: folderDialog; onAccepted: { let next = (App.config.sync_folders || []).slice(); next.push({local_folder:App.localPath(selectedFolder),remote_path:""}); App.apply({sync_folders:next}) } }
     }
     Connections {
         target: App
         function onShowStatus() { statusWindow.showPanel() }
         function onShowSettings() { settings.showSettings() }
+        function onShowFolders() { settings.showSettings(); pages.currentIndex = 0 }
         function onHideStatus() { if (App.trayAvailable) statusWindow.hide() }
         function onConfigChanged() {
             // Translated model resets can otherwise overwrite the saved selection with index zero.

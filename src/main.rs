@@ -3,6 +3,7 @@ use clap::Parser;
 use filenode::{
     config::Config,
     engine, filesystem,
+    group::SyncGroup,
     i18n::{Language, Message},
     jmap::{Jmap, Remote},
     planner,
@@ -104,7 +105,6 @@ fn main() -> Result<()> {
     }
     let language = config.language.resolve();
     config.validate()?;
-    let mut store = Store::open(&config)?;
     let cancel = Arc::new(AtomicBool::new(false));
     let authentication = if config.auth_mode == filenode::config::AuthMode::Browser {
         filenode::auth::browser_authentication(&config, false, &cancel, |_| {})?
@@ -112,35 +112,31 @@ fn main() -> Result<()> {
         filenode::auth::Authentication::basic(&config.username, password(&config)?)
     };
     let mut remote = Jmap::connect_authenticated(&config, authentication, cancel.clone())?;
-    let mut scanner =
-        filenode::scanner::LocalScanner::new(&config.local_folder, config.full_scan_seconds);
     if args.dry_run {
-        let local = filesystem::scan(&config.local_folder, config.max_file_bytes)?;
         let snapshot = remote.snapshot(None)?;
-        let remote_folder = config.remote_folder_name()?;
-        let root = store.get_meta::<String>("remote_root_id")?.or_else(|| {
-            snapshot
-                .nodes
-                .iter()
-                .find(|n| {
-                    n.parent_id.is_none()
-                        && filesystem::folded(&n.name) == filesystem::folded(remote_folder)
-                })
-                .map(|n| n.id.clone())
-        });
-        let tree = match root {
-            Some(root) => filenode::jmap::scoped_tree(&snapshot, Some(&root))?,
-            None => Default::default(),
-        };
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&planner::plan(
-                &local,
-                &tree,
-                &store.baselines()?,
-                &config
-            )?)?
-        );
+        let mut plans = Vec::new();
+        for folder in config.folder_configs()? {
+            folder.validate()?;
+            let store = Store::open(&folder)?;
+            let local = filesystem::scan(&folder.local_folder, folder.max_file_bytes)?;
+            let root = match store.get_meta::<String>("remote_root_id")? {
+                Some(root) => {
+                    if !snapshot.nodes.iter().any(|node| {
+                        node.id == root && node.kind == filenode::model::Kind::Directory
+                    }) {
+                        anyhow::bail!("Remote sync folder is missing; dry-run blocked");
+                    }
+                    Some(root)
+                }
+                None => engine::find_folder_path(&snapshot, &folder.remote_folder_path()?)?,
+            };
+            let tree = match root {
+                Some(root) => filenode::jmap::scoped_tree(&snapshot, Some(&root))?,
+                None => Default::default(),
+            };
+            plans.push(serde_json::json!({"local_folder":folder.local_folder,"remote_path":folder.remote_folder_path()?,"actions":planner::plan(&local,&tree,&store.baselines()?,&folder)?}));
+        }
+        println!("{}", serde_json::to_string_pretty(&plans)?);
         return Ok(());
     }
     let mut log = |line: Message| {
@@ -152,15 +148,9 @@ fn main() -> Result<()> {
     };
     let once_deadline = std::time::Instant::now()
         + Duration::from_secs(config.file_settle_seconds.saturating_mul(2) + 30);
+    let mut group = SyncGroup::new(&config)?;
     loop {
-        let report = engine::sync_with_scanner(
-            &config,
-            &mut store,
-            &mut remote,
-            &cancel,
-            &mut log,
-            &mut scanner,
-        )?;
+        let report = group.poll(&mut remote, &cancel, &mut log)?;
         println!(
             "{}",
             Message::new("cli.report")
@@ -172,6 +162,9 @@ fn main() -> Result<()> {
                 .with("renamed", report.renamed)
                 .render(language)
         );
+        if report.failed_folders > 0 && args.once {
+            anyhow::bail!("One or more folders could not synchronize; see the folder errors above");
+        }
         if report.needs_rescan {
             continue;
         }
@@ -180,7 +173,7 @@ fn main() -> Result<()> {
                 if std::time::Instant::now() >= once_deadline {
                     anyhow::bail!("Files remain busy or changing; use the desktop worker for continued retries");
                 }
-                scanner.wait(Duration::from_secs(3));
+                std::thread::sleep(Duration::from_millis(250));
                 continue;
             }
             break;
@@ -188,14 +181,8 @@ fn main() -> Result<()> {
         if cancel.load(Ordering::Relaxed) {
             break;
         }
-        let delay = if report.deferred > 0 {
-            3
-        } else {
-            config.interval_seconds
-        };
-        let deadline = std::time::Instant::now() + Duration::from_secs(delay);
-        while std::time::Instant::now() < deadline && !scanner.ready() {
-            scanner.wait(deadline.saturating_duration_since(std::time::Instant::now()));
+        while !group.ready() && !cancel.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(250));
         }
     }
     Ok(())

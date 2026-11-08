@@ -4,11 +4,9 @@ use anyhow::{bail, Context, Result};
 use filenode::{
     auth::{self, Authentication},
     config::{AuthMode, Config},
-    engine,
+    group::SyncGroup,
     jmap::Jmap,
     runtime::{Policy, PowerState, Scope},
-    scanner::LocalScanner,
-    store::Store,
 };
 use serde_json::{json, Value};
 use std::{
@@ -41,6 +39,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
     } else {
         Config::default()
     };
+    config.resolve_folder_paths()?;
     if config.autostart && !external_autostart {
         if let Some(gui) = &gui {
             crate::autostart::set_executable(true, &path, gui)?;
@@ -52,7 +51,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
     let mut policy = Policy::new(&config, Arc::new(AtomicBool::new(false)), power.clone());
     let immediate = Arc::new(AtomicBool::new(false));
     let mut worker: Option<thread::JoinHandle<()>> = None;
-    output.send(json!({"event":"ready","protocol":2,"config":config}));
+    output.send(json!({"event":"ready","protocol":3,"config":config}));
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
     loop {
@@ -81,7 +80,11 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
         let result: Result<()> = (|| {
             match kind.as_str() {
                 "configure" => {
-                    let next: Config = serde_json::from_value(command["config"].take())?;
+                    let mut next: Config = serde_json::from_value(command["config"].take())?;
+                    next.resolve_folder_paths()?;
+                    if next.sync_folders != config.sync_folders {
+                        next.normalize_folders(&config)?;
+                    }
                     if next.upload_limit_kib > 1_000_000
                         || next.download_limit_kib > 1_000_000
                         || next.file_settle_seconds > 60
@@ -92,7 +95,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                         && (next.server != config.server
                             || next.username != config.username
                             || next.account_id != config.account_id
-                            || next.local_folder != config.local_folder)
+                            || next.sync_folders != config.sync_folders)
                     {
                         bail!("Pause synchronization before changing the account or folders");
                     }
@@ -124,8 +127,6 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     if let Some(previous) = worker.take() {
                         let _ = previous.join();
                     }
-                    std::fs::create_dir_all(&config.local_folder)?;
-                    config.local_folder = config.local_folder.canonicalize()?;
                     config.validate()?;
                     let entry = keyring::Entry::new("FileNode", &config.credential_key())?;
                     let mut supplied =
@@ -162,8 +163,16 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     output.send(json!({"event":"running","value":true,"config":settings}));
                     worker = Some(thread::spawn(move || {
                         let _scope = Scope::enter(policy.clone());
-                        let mut scanner =
-                            LocalScanner::new(&settings.local_folder, settings.full_scan_seconds);
+                        let mut group = match SyncGroup::new(&settings) {
+                            Ok(group) => group,
+                            Err(error) => {
+                                output
+                                    .send(json!({"event":"error","details":format!("{error:#}")}));
+                                running.store(false, Ordering::Relaxed);
+                                output.send(json!({"event":"running","value":false}));
+                                return;
+                            }
+                        };
                         let mut connection = None;
                         let mut revision = policy.power.revision.load(Ordering::SeqCst);
                         let mut backoff = 5;
@@ -185,7 +194,6 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                     )?
                                 }
                             };
-                            let mut store = Store::open(&settings)?;
                             while !policy.cancel.load(Ordering::Relaxed) {
                                 if policy.power_paused() {
                                     output.send(
@@ -196,7 +204,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                     {
                                         thread::sleep(Duration::from_millis(250));
                                     }
-                                    scanner.invalidate();
+                                    group.invalidate();
                                     connection = None;
                                     if policy.cancel.load(Ordering::Relaxed) {
                                         break;
@@ -205,12 +213,21 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                 let current = policy.power.revision.load(Ordering::SeqCst);
                                 if current != revision {
                                     revision = current;
-                                    scanner.invalidate();
+                                    group.invalidate();
                                     connection = None;
                                 }
-                                output.send(json!({"event":"status","key":"status.connecting"}));
+                                if immediate.swap(false, Ordering::Relaxed) {
+                                    group.invalidate();
+                                }
+                                if !group.ready() {
+                                    thread::sleep(Duration::from_millis(250));
+                                    continue;
+                                }
                                 let result = (|| {
                                     if connection.is_none() {
+                                        output.send(
+                                            json!({"event":"status","key":"status.connecting"}),
+                                        );
                                         let mut remote = Jmap::connect_authenticated(
                                             &settings,
                                             authentication.clone(),
@@ -222,27 +239,19 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                     let mut log = |message| {
                                         output.send(json!({"event":"activity","message":message}))
                                     };
-                                    engine::sync_with_scanner(
-                                        &settings,
-                                        &mut store,
+                                    group.poll(
                                         connection.as_mut().unwrap(),
                                         &policy.cancel,
                                         &mut log,
-                                        &mut scanner,
                                     )
                                 })();
-                                let (delay, failed) = match result {
+                                match result {
                                     Ok(report) => {
                                         backoff = 5;
-                                        let delay = if report.needs_rescan {
-                                            1
-                                        } else if report.deferred > 0 {
-                                            3
-                                        } else {
-                                            settings.interval_seconds
-                                        };
+                                        if report.failed_folders > 0 {
+                                            connection = None;
+                                        }
                                         output.send(json!({"event":"report","report":report}));
-                                        (delay, false)
                                     }
                                     Err(_) if policy.cancel.load(Ordering::Relaxed) => break,
                                     Err(_) if policy.power_paused() => {
@@ -261,31 +270,18 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                             json!({"event":"retry","details":format!("{error:#}")}),
                                         );
                                         connection = None;
-                                        scanner.invalidate();
-                                        let delay = backoff;
+                                        group.invalidate();
+                                        let until = Instant::now() + Duration::from_secs(backoff);
                                         backoff = (backoff * 2).min(300);
-                                        (delay, true)
-                                    }
-                                };
-                                let until = Instant::now() + Duration::from_secs(delay);
-                                while Instant::now() < until
-                                    && !policy.cancel.load(Ordering::Relaxed)
-                                    && !policy.power_paused()
-                                {
-                                    if immediate.swap(false, Ordering::Relaxed) {
-                                        scanner.invalidate();
-                                        break;
-                                    }
-                                    if !failed && scanner.ready() {
-                                        break;
-                                    }
-                                    let duration = until
-                                        .saturating_duration_since(Instant::now())
-                                        .min(Duration::from_millis(500));
-                                    if failed {
-                                        thread::sleep(duration);
-                                    } else {
-                                        scanner.wait(duration);
+                                        while Instant::now() < until
+                                            && !policy.cancel.load(Ordering::Relaxed)
+                                            && !policy.power_paused()
+                                        {
+                                            if immediate.swap(false, Ordering::Relaxed) {
+                                                break;
+                                            }
+                                            thread::sleep(Duration::from_millis(250));
+                                        }
                                     }
                                 }
                             }

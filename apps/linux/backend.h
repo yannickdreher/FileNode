@@ -42,6 +42,7 @@ public:
     Q_INVOKABLE void pause();
     Q_INVOKABLE void check();
     Q_INVOKABLE void openFolder();
+    Q_INVOKABLE void openPath(const QString &path);
     Q_INVOKABLE void openOnline();
     Q_INVOKABLE void openRecovery();
     Q_INVOKABLE void quit();
@@ -54,6 +55,7 @@ signals:
     void configChanged();
     void showStatus();
     void showSettings();
+    void showFolders();
     void hideStatus();
 private:
     void send(QJsonObject command);

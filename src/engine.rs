@@ -25,6 +25,7 @@ pub struct Report {
     pub renamed: usize,
     pub needs_rescan: bool,
     pub deferred: usize,
+    pub failed_folders: usize,
 }
 
 pub fn sync<R: Remote>(
@@ -65,7 +66,7 @@ pub fn sync_with_scanner<R: Remote>(
     if cache.as_ref().is_none_or(|old| old.state != snapshot.state) {
         store.set_meta("remote_snapshot", &snapshot)?;
     }
-    let remote_folder = config.remote_folder_name()?;
+    let remote_folder = config.remote_folder_path()?;
     let root_id = Some(match store.get_meta::<String>("remote_root_id")? {
         Some(id) => {
             if !snapshot
@@ -78,29 +79,7 @@ pub fn sync_with_scanner<R: Remote>(
             id
         }
         None => {
-            let matches: Vec<_> = snapshot
-                .nodes
-                .iter()
-                .filter(|n| {
-                    n.parent_id.is_none() && disk::folded(&n.name) == disk::folded(remote_folder)
-                })
-                .cloned()
-                .collect();
-            let node = match matches.as_slice() {
-                [node] if node.kind == Kind::Directory => node.clone(),
-                [] => remote.create(
-                    remote_folder,
-                    None,
-                    Kind::Directory,
-                    None,
-                    0,
-                    &mut snapshot.state,
-                )?,
-                _ => bail!("Remote sync folder is ambiguous or is not a directory"),
-            };
-            if !snapshot.nodes.iter().any(|n| n.id == node.id) {
-                snapshot.nodes.push(node.clone());
-            }
+            let node = ensure_folder_path(remote, &mut snapshot, &remote_folder)?;
             store.set_meta("remote_root_id", &node.id)?;
             node.id
         }
@@ -373,6 +352,65 @@ pub fn sync_with_scanner<R: Remote>(
         log(Message::new(completed).with("path", &path));
     }
     Ok(report)
+}
+
+pub fn find_folder_path(snapshot: &Snapshot, path: &str) -> Result<Option<String>> {
+    Config::validate_remote_path(path)?;
+    let mut parent = None;
+    for name in path.split('/') {
+        let matches: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.parent_id == parent && disk::folded(&node.name) == disk::folded(name)
+            })
+            .collect();
+        match matches.as_slice() {
+            [node] if node.kind == Kind::Directory => parent = Some(node.id.clone()),
+            [] => return Ok(None),
+            _ => bail!("Remote sync folder is ambiguous or is not a directory"),
+        }
+    }
+    Ok(parent)
+}
+
+fn ensure_folder_path<R: Remote>(
+    remote: &mut R,
+    snapshot: &mut Snapshot,
+    path: &str,
+) -> Result<Node> {
+    Config::validate_remote_path(path)?;
+    let mut parent = None;
+    let mut result = None;
+    for name in path.split('/') {
+        let matches: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.parent_id == parent && disk::folded(&node.name) == disk::folded(name)
+            })
+            .cloned()
+            .collect();
+        let node = match matches.as_slice() {
+            [node] if node.kind == Kind::Directory => node.clone(),
+            [] => {
+                let node = remote.create(
+                    name,
+                    parent.as_deref(),
+                    Kind::Directory,
+                    None,
+                    0,
+                    &mut snapshot.state,
+                )?;
+                snapshot.nodes.push(node.clone());
+                node
+            }
+            _ => bail!("Remote sync folder is ambiguous or is not a directory"),
+        };
+        parent = Some(node.id.clone());
+        result = Some(node);
+    }
+    result.context("Remote folder path is empty")
 }
 
 fn check_state<R: Remote>(remote: &R, expected: &str) -> Result<()> {

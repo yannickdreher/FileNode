@@ -48,14 +48,15 @@ int main(int argc, char **argv) {
             else emit backend.showSettings();
         });
         QTimer::singleShot(3200, &application, [&, directory] {
-            bool ready = backend.ready() && backend.status() == backend.translate("status.power_paused");
+            bool ready = backend.ready() && backend.error().isEmpty() && backend.status() == backend.translate("status.power_paused");
             if (parser.isSet("self-test-account")) {
                 auto *selector = window->findChild<QObject *>("authModeSelector");
                 const int expected = backend.config().value("auth_mode").toString() == "browser" ? 1 : 0;
                 ready = ready && selector && selector->property("currentIndex").toInt() == expected;
             }
             for (auto *candidate : application.allWindows()) if (candidate != window && candidate->isVisible()) if (auto *quick = qobject_cast<QQuickWindow *>(candidate)) quick->grabWindow().save(QDir(directory).filePath("qt-settings.png"));
-            QFile result(QDir(directory).filePath("qt-smoke.json")); result.open(QIODevice::WriteOnly); result.write(QJsonDocument(QJsonObject{{"ready",ready},{"style",backend.style()},{"qt",qVersion()}}).toJson());
+            const auto folders = backend.config().value("sync_folders").toList().size();
+            QFile result(QDir(directory).filePath("qt-smoke.json")); result.open(QIODevice::WriteOnly); result.write(QJsonDocument(QJsonObject{{"ready",ready},{"folders",folders},{"style",backend.style()},{"qt",qVersion()}}).toJson());
             backend.quit(); if (!ready) application.exit(2);
         });
     }
