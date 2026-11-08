@@ -4,6 +4,257 @@ use anyhow::{bail, Result};
 use filenode::{config::Config, engine, filesystem, jmap::Remote, model::*, store::Store};
 use std::{collections::HashMap, fs, path::Path, sync::atomic::AtomicBool};
 
+fn multiple_folder_config(home: &Path) -> Config {
+    let selected = [home.join("Desktop"), home.join("Documents").join("Büro")];
+    for path in &selected {
+        fs::create_dir_all(path).unwrap();
+    }
+    Config {
+        username: "test@example.org".into(),
+        file_settle_seconds: 0,
+        sync_folders: Some(
+            selected
+                .into_iter()
+                .map(|local_folder| filenode::config::SyncFolder {
+                    remote_path: Config::derive_remote_path(&local_folder, home).unwrap(),
+                    local_folder,
+                })
+                .collect(),
+        ),
+        ..Config::default()
+    }
+}
+
+#[test]
+fn multiple_folders_use_leaf_names_and_stop_without_deleting() {
+    use filenode::group::SyncGroup;
+    let home = tempfile::tempdir().unwrap();
+    let mut config = multiple_folder_config(home.path());
+    let folders = config.sync_folders.as_ref().unwrap().clone();
+    assert_eq!(folders[0].remote_path, "Desktop");
+    assert_eq!(folders[1].remote_path, "Büro");
+    fs::write(folders[0].local_folder.join("same.txt"), "desktop original").unwrap();
+    fs::write(folders[1].local_folder.join("same.txt"), "office original").unwrap();
+    let mut server = Server::default();
+    let mut state = server.state();
+    let documents = server
+        .create("Documents", None, Kind::Directory, None, 0, &mut state)
+        .unwrap();
+    let sibling = server
+        .create(
+            "Unselected",
+            Some(&documents.id),
+            Kind::Directory,
+            None,
+            0,
+            &mut state,
+        )
+        .unwrap();
+    let mut group = SyncGroup::new(&config).unwrap();
+    assert_eq!(
+        group
+            .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+            .unwrap()
+            .uploaded,
+        2
+    );
+    let snapshot = server.snapshot(None).unwrap();
+    let desktop = engine::find_folder_path(&snapshot, "Desktop")
+        .unwrap()
+        .unwrap();
+    let office = engine::find_folder_path(&snapshot, "Büro")
+        .unwrap()
+        .unwrap();
+    assert!(server
+        .nodes
+        .iter()
+        .any(|node| node.id == sibling.id && node.parent_id.as_ref() == Some(&documents.id)));
+    assert!(!server
+        .nodes
+        .iter()
+        .any(|node| node.name == "Büro" && node.parent_id.as_ref() == Some(&documents.id)));
+    let desktop_file = server
+        .nodes
+        .iter()
+        .find(|node| node.parent_id.as_ref() == Some(&desktop) && node.name == "same.txt")
+        .unwrap()
+        .id
+        .clone();
+    let office_file = server
+        .nodes
+        .iter()
+        .find(|node| node.parent_id.as_ref() == Some(&office) && node.name == "same.txt")
+        .unwrap()
+        .id
+        .clone();
+    assert_ne!(desktop_file, office_file);
+    drop(group);
+    config.sync_folders.as_mut().unwrap().remove(0);
+    fs::write(
+        folders[0].local_folder.join("same.txt"),
+        "unsynchronized local edit",
+    )
+    .unwrap();
+    fs::write(folders[1].local_folder.join("same.txt"), "office update").unwrap();
+    let mut group = SyncGroup::new(&config).unwrap();
+    assert_eq!(
+        group
+            .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+            .unwrap()
+            .failed_folders,
+        0
+    );
+    let node = server
+        .nodes
+        .iter()
+        .find(|node| node.id == desktop_file)
+        .unwrap();
+    assert_eq!(
+        server.blobs[node.blob_id.as_ref().unwrap()],
+        b"desktop original"
+    );
+    assert_eq!(
+        fs::read(folders[0].local_folder.join("same.txt")).unwrap(),
+        b"unsynchronized local edit"
+    );
+    let node = server
+        .nodes
+        .iter()
+        .find(|node| node.id == office_file)
+        .unwrap();
+    assert_eq!(
+        server.blobs[node.blob_id.as_ref().unwrap()],
+        b"office update"
+    );
+}
+
+#[test]
+fn an_unavailable_folder_does_not_recreate_local_roots_or_block_healthy_folders() {
+    use filenode::{config::SyncFolder, group::SyncGroup};
+    let home = tempfile::tempdir().unwrap();
+    let mut config = multiple_folder_config(home.path());
+    config.sync_folders.as_mut().unwrap().truncate(1);
+    let missing = home.path().join("Offline");
+    config.sync_folders.as_mut().unwrap().insert(
+        0,
+        SyncFolder {
+            local_folder: missing.clone(),
+            remote_path: "Offline".into(),
+        },
+    );
+    fs::write(home.path().join("Desktop/healthy.txt"), "available").unwrap();
+    let mut server = Server::default();
+    let mut group = SyncGroup::new(&config).unwrap();
+    let report = group
+        .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+        .unwrap();
+    assert_eq!(report.failed_folders, 1);
+    assert_eq!(report.uploaded, 1);
+    assert!(!missing.exists());
+    assert!(!server.nodes.iter().any(|node| node.name == "Offline"));
+    fs::create_dir(&missing).unwrap();
+    fs::write(missing.join("returned.txt"), "back online").unwrap();
+    group.invalidate();
+    let report = group
+        .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+        .unwrap();
+    assert_eq!(report.failed_folders, 0);
+    assert_eq!(report.uploaded, 1);
+}
+
+#[test]
+fn multiple_roots_reject_overlaps_case_collisions_and_unsafe_remote_paths() {
+    let home = tempfile::tempdir().unwrap();
+    let mut config = multiple_folder_config(home.path());
+    let original = config.sync_folders.as_ref().unwrap().clone();
+    config.sync_folders.as_mut().unwrap()[1].local_folder = home.path().join("Desktop/nested");
+    fs::create_dir_all(home.path().join("Desktop/nested")).unwrap();
+    assert!(config.validate().is_err());
+    config.sync_folders = Some(original.clone());
+    config.sync_folders.as_mut().unwrap()[1].remote_path = "desktop".into();
+    assert!(config.validate().is_err());
+    config.sync_folders = Some(original);
+    config.sync_folders.as_mut().unwrap()[1].remote_path = "Desktop/subfolder".into();
+    assert!(config.validate().is_err());
+    for invalid in [
+        "../Desktop",
+        "/Desktop",
+        "Documents//Büro",
+        "Documents/../Büro",
+        "Documents\\Büro",
+        ".filenode/history",
+    ] {
+        assert!(Config::validate_remote_path(invalid).is_err(), "{invalid}");
+    }
+    // Nested selections use only their own name; equal leaf names cannot bind
+    // two independent local trees to the same remote directory.
+    let taxes = home.path().join("Dokumente/Steuern");
+    fs::create_dir_all(&taxes).unwrap();
+    assert_eq!(
+        Config::derive_remote_path(&taxes, home.path()).unwrap(),
+        "Steuern"
+    );
+    let duplicate = home.path().join("Archive/Desktop");
+    fs::create_dir_all(&duplicate).unwrap();
+    let mut collisions = multiple_folder_config(home.path());
+    collisions
+        .sync_folders
+        .as_mut()
+        .unwrap()
+        .push(filenode::config::SyncFolder {
+            remote_path: Config::derive_remote_path(&duplicate, home.path()).unwrap(),
+            local_folder: duplicate,
+        });
+    assert!(collisions.validate().is_err());
+    assert!(Config::derive_remote_path(home.path(), home.path()).is_err());
+    let outside = tempfile::tempdir().unwrap();
+    assert_eq!(
+        Config::derive_remote_path(outside.path(), home.path()).unwrap(),
+        outside.path().file_name().unwrap().to_str().unwrap()
+    );
+    assert!(!home
+        .path()
+        .join("Desktop")
+        .join(filesystem::PRIVATE_DIR)
+        .exists());
+}
+
+#[test]
+fn multi_folder_power_pause_blocks_all_scans_and_state_creation() {
+    use filenode::{
+        group::SyncGroup,
+        runtime::{Policy, PowerState, Scope},
+    };
+    use std::sync::Arc;
+    let home = tempfile::tempdir().unwrap();
+    let config = multiple_folder_config(home.path());
+    fs::write(home.path().join("Desktop/a.txt"), "one").unwrap();
+    let power = Arc::new(PowerState::default());
+    let _scope = Scope::enter(Policy::new(
+        &config,
+        Arc::new(AtomicBool::new(false)),
+        power.clone(),
+    ));
+    let mut group = SyncGroup::new(&config).unwrap();
+    let mut server = Server::default();
+    power.set(true, false);
+    assert!(group
+        .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+        .is_err());
+    assert_eq!(server.writes, 0);
+    for folder in config.sync_folders.as_ref().unwrap() {
+        assert!(!folder.local_folder.join(filesystem::PRIVATE_DIR).exists());
+    }
+    power.set(false, false);
+    assert_eq!(
+        group
+            .poll(&mut server, &AtomicBool::new(false), &mut |_| {})
+            .unwrap()
+            .uploaded,
+        1
+    );
+}
+
 #[test]
 fn locked_file_is_deferred_without_deletion_while_other_files_sync() {
     let mut f = Fixture::new();
@@ -132,6 +383,8 @@ fn idle_sync_reuses_hashes_and_does_not_rewrite_unchanged_baselines() {
 
 #[derive(Default)]
 struct Server {
+    limits: filenode::jmap::UploadLimits,
+    uploader: Option<std::sync::Arc<dyn filenode::jmap::Uploader>>,
     nodes: Vec<Node>,
     blobs: HashMap<String, Vec<u8>>,
     revision: usize,
@@ -165,6 +418,22 @@ impl Server {
 }
 
 impl Remote for Server {
+    fn upload_limits(&self) -> filenode::jmap::UploadLimits {
+        self.limits
+    }
+    fn uploader(&self) -> Option<std::sync::Arc<dyn filenode::jmap::Uploader>> {
+        self.uploader.clone()
+    }
+    fn create_trash(&mut self, parent: Option<&str>, state: &mut String) -> Result<Node> {
+        let mut node = self.create(".Trash", parent, Kind::Directory, None, 0, state)?;
+        node.role = Some("trash".into());
+        self.nodes
+            .iter_mut()
+            .find(|item| item.id == node.id)
+            .unwrap()
+            .role = node.role.clone();
+        Ok(node)
+    }
     fn account_id(&self) -> &str {
         "account"
     }
@@ -209,6 +478,7 @@ impl Remote for Server {
             blob_id: blob.map(str::to_owned),
             kind,
             size,
+            role: None,
         };
         self.nodes.push(node.clone());
         self.revision += 1;
@@ -248,6 +518,126 @@ struct Fixture {
     folder: tempfile::TempDir,
     config: Config,
     server: Server,
+}
+
+#[test]
+fn oversized_uploads_emit_file_warnings_without_blocking_small_files() {
+    let mut f = Fixture::new();
+    f.server.limits.max_size_upload = Some(4);
+    f.local("small.txt", "abc");
+    f.local("large.txt", "abcdef");
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = events.clone();
+    let _observer =
+        filenode::activity::Scope::observe(move |event| sink.lock().unwrap().push(event));
+    let report = f.run().unwrap();
+    assert_eq!(report.uploaded, 1);
+    assert_eq!(report.limited, 1);
+    assert!(!f.server.nodes.iter().any(|node| node.name == "large.txt"));
+    assert_eq!(f.read("large.txt"), "abcdef");
+    assert!(events.lock().unwrap().iter().any(|event| matches!(event, filenode::activity::Event::FileLimit { path, size: 6, limit: 4, .. } if path == "large.txt")));
+    f.server.limits.max_size_upload = Some(10);
+    assert_eq!(f.run().unwrap().uploaded, 1);
+}
+
+#[test]
+fn parallel_blobs_obey_server_and_user_limits_then_commit_serially() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct Upload {
+        active: AtomicUsize,
+        peak: AtomicUsize,
+        policy: Arc<filenode::runtime::Policy>,
+    }
+    impl filenode::jmap::Uploader for Upload {
+        fn policy(&self) -> Arc<filenode::runtime::Policy> {
+            self.policy.clone()
+        }
+        fn send_blob(&self, path: &Path, size: u64) -> Result<String> {
+            let count = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.peak.fetch_max(count, Ordering::SeqCst);
+            assert_eq!(fs::read(path)?.len() as u64, size);
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(uuid::Uuid::new_v4().to_string())
+        }
+    }
+    let mut f = Fixture::new();
+    f.config.parallel_uploads = 8;
+    f.server.limits.max_concurrent_upload = Some(2);
+    let upload = Arc::new(Upload {
+        active: AtomicUsize::new(0),
+        peak: AtomicUsize::new(0),
+        policy: filenode::runtime::Policy::new(
+            &f.config,
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Default::default()),
+        ),
+    });
+    f.server.uploader = Some(upload.clone());
+    for index in 0..5 {
+        f.local(&format!("{index}.txt"), "payload");
+    }
+    assert_eq!(f.run().unwrap().uploaded, 5);
+    assert_eq!(upload.peak.load(Ordering::SeqCst), 2);
+    assert_eq!(f.run().unwrap().uploaded, 0);
+    f.config.parallel_uploads = 1;
+    upload.peak.store(0, Ordering::SeqCst);
+    f.local("serial.txt", "payload");
+    assert_eq!(f.run().unwrap().uploaded, 1);
+    assert_eq!(upload.peak.load(Ordering::SeqCst), 0); // Serial Remote::upload path.
+}
+
+#[test]
+fn exclusions_skip_both_directions_and_retain_baselines_without_deletion() {
+    let mut f = Fixture::new();
+    f.config.exclude_patterns.clear();
+    f.local("local.tmp", "keep remote copy");
+    f.local("remote.tmp", "keep local copy");
+    f.run().unwrap();
+    f.config.exclude_patterns = vec!["*.tmp".into()];
+    fs::remove_file(f.folder.path().join("local.tmp")).unwrap();
+    f.server.nodes.retain(|node| node.name != "remote.tmp");
+    f.server.revision += 1;
+    f.local("new.tmp", "do not upload");
+    f.local("normal.txt", "upload normally");
+    let report = f.run().unwrap();
+    assert_eq!(report.uploaded, 1);
+    assert_eq!(report.recycled, 0);
+    assert_eq!(f.read("remote.tmp"), "keep local copy");
+    assert!(f.server.nodes.iter().any(|node| node.name == "local.tmp"));
+    assert!(!f.server.nodes.iter().any(|node| node.name == "new.tmp"));
+    assert!(Store::open(&f.config)
+        .unwrap()
+        .baselines()
+        .unwrap()
+        .contains_key("local.tmp"));
+    f.config.exclude_patterns.clear();
+    assert_eq!(f.run().unwrap().uploaded, 1);
+    assert!(f.server.nodes.iter().any(|node| node.name == "new.tmp"));
+}
+
+#[test]
+fn excluded_children_prevent_parent_deletion_but_allow_sibling_updates() {
+    let mut f = Fixture::new();
+    fs::create_dir(f.folder.path().join("Docs")).unwrap();
+    f.local("Docs/normal.txt", "original");
+    f.local("Docs/private.tmp", "local only");
+    f.run().unwrap();
+    f.local("Docs/normal.txt", "updated");
+    assert_eq!(f.run().unwrap().uploaded, 1);
+    assert_eq!(f.read("Docs/private.tmp"), "local only");
+    let docs = f.server.node("Docs").id;
+    f.server
+        .nodes
+        .retain(|node| node.id != docs && node.parent_id.as_deref() != Some(&docs));
+    f.server.revision += 1;
+    let report = f.run().unwrap();
+    assert!(report.blocked > 0);
+    assert_eq!(f.read("Docs/private.tmp"), "local only");
+    assert_eq!(f.read("Docs/normal.txt"), "updated");
 }
 impl Fixture {
     fn new() -> Self {
@@ -476,26 +866,143 @@ fn overwrite_keeps_remote_recovery_copy() {
 }
 
 #[test]
-fn local_delete_soft_moves_remote_to_recovery_folder() {
+fn local_delete_uses_the_native_server_trash_without_a_download_loop_and_restores() {
     let mut f = Fixture::new();
     f.local("a.txt", "one");
     f.run().unwrap();
     let id = f.server.node("a.txt").id;
     fs::remove_file(f.folder.path().join("a.txt")).unwrap();
     assert_eq!(f.run().unwrap().recycled, 1);
-    let trash = f.server.node(filesystem::REMOTE_TRASH).id;
+    let trash = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| node.role.as_deref() == Some("trash"))
+        .unwrap()
+        .id
+        .clone();
+    let moved = f.server.nodes.iter().find(|node| node.id == id).unwrap();
+    let batch = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| Some(&node.id) == moved.parent_id.as_ref())
+        .unwrap();
+    assert_eq!(batch.parent_id.as_ref(), Some(&trash));
+    assert!(batch.name.ends_with(&format!(
+        "~{}",
+        f.server.node(f.config.remote_folder_name().unwrap()).id
+    )));
+    assert_eq!(moved.name, "a.txt");
+    f.run().unwrap();
+    assert!(!f.folder.path().join("a.txt").exists());
+    let root = f.server.node(f.config.remote_folder_name().unwrap()).id;
+    let node = f
+        .server
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == id)
+        .unwrap();
+    node.parent_id = Some(root);
+    f.server.revision += 1;
+    assert_eq!(f.run().unwrap().downloaded, 1);
+    assert_eq!(f.read("a.txt"), "one");
+}
+
+#[test]
+fn deleting_a_directory_preserves_its_tree_in_one_bulwark_compatible_trash_batch() {
+    let mut f = Fixture::new();
+    fs::create_dir(f.folder.path().join("docs")).unwrap();
+    f.local("docs/a.txt", "one");
+    f.run().unwrap();
+    let directory = f.server.node("docs").id;
+    let file = f.server.node("a.txt").id;
+    fs::remove_dir_all(f.folder.path().join("docs")).unwrap();
+    assert_eq!(f.run().unwrap().recycled, 1);
+    let moved = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| node.id == directory)
+        .unwrap();
+    let batch = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| Some(&node.id) == moved.parent_id.as_ref())
+        .unwrap();
+    let trash = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| Some(&node.id) == batch.parent_id.as_ref())
+        .unwrap();
+    assert_eq!(trash.name, ".Trash");
+    assert!(batch.name.contains('~'));
     assert_eq!(
         f.server
             .nodes
             .iter()
-            .find(|n| n.id == id)
+            .find(|node| node.id == file)
             .unwrap()
             .parent_id
-            .as_ref(),
-        Some(&trash)
+            .as_deref(),
+        Some(directory.as_str())
     );
+    assert_eq!(f.run().unwrap().downloaded, 0);
+}
+
+#[test]
+fn moving_a_remote_file_to_trash_removes_the_local_copy_and_never_syncs_trash_contents() {
+    let mut f = Fixture::new();
+    f.local("a.txt", "one");
     f.run().unwrap();
+    let mut state = f.server.state();
+    let trash = f.server.create_trash(None, &mut state).unwrap();
+    let node = f
+        .server
+        .nodes
+        .iter_mut()
+        .find(|node| node.name == "a.txt")
+        .unwrap();
+    node.parent_id = Some(trash.id);
+    f.server.revision += 1;
+    let report = f.run().unwrap();
+    assert_eq!(report.recycled, 1);
+    assert_eq!(report.downloaded, 0);
     assert!(!f.folder.path().join("a.txt").exists());
+    assert!(f.history_contains(b"one"));
+    let report = f.run().unwrap();
+    assert_eq!(report.uploaded + report.downloaded, 0);
+}
+
+#[test]
+fn a_legacy_bulwark_trash_without_a_role_is_shared_and_not_duplicated() {
+    let mut f = Fixture::new();
+    f.local("a.txt", "one");
+    f.run().unwrap();
+    let mut state = f.server.state();
+    let trash = f
+        .server
+        .create(".Trash", None, Kind::Directory, None, 0, &mut state)
+        .unwrap();
+    fs::remove_file(f.folder.path().join("a.txt")).unwrap();
+    f.run().unwrap();
+    assert_eq!(
+        f.server
+            .nodes
+            .iter()
+            .filter(|node| node.name == ".Trash")
+            .count(),
+        1
+    );
+    let batch = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| node.parent_id.as_ref() == Some(&trash.id))
+        .unwrap();
+    assert_eq!(f.server.node("a.txt").parent_id.as_ref(), Some(&batch.id));
 }
 
 #[test]

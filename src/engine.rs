@@ -25,6 +25,8 @@ pub struct Report {
     pub renamed: usize,
     pub needs_rescan: bool,
     pub deferred: usize,
+    pub failed_folders: usize,
+    pub limited: usize,
 }
 
 pub fn sync<R: Remote>(
@@ -59,13 +61,15 @@ pub fn sync_with_scanner<R: Remote>(
     // A scan MUST finish completely before any remote mutation or deletion is planned.
     crate::runtime::check()?;
     scanner.set_settle_seconds(config.file_settle_seconds);
-    let mut local = scanner.scan(config.max_file_bytes)?;
+    scanner.set_exclusions(&config.exclude_patterns)?;
+    let upload_limit = remote.upload_limits().effective_size(config);
+    let mut local = scanner.scan(upload_limit)?;
     let cache = store.get_meta::<Snapshot>("remote_snapshot")?;
     let mut snapshot = remote.snapshot(cache.as_ref())?;
     if cache.as_ref().is_none_or(|old| old.state != snapshot.state) {
         store.set_meta("remote_snapshot", &snapshot)?;
     }
-    let remote_folder = config.remote_folder_name()?;
+    let remote_folder = config.remote_folder_path()?;
     let root_id = Some(match store.get_meta::<String>("remote_root_id")? {
         Some(id) => {
             if !snapshot
@@ -78,36 +82,46 @@ pub fn sync_with_scanner<R: Remote>(
             id
         }
         None => {
-            let matches: Vec<_> = snapshot
-                .nodes
-                .iter()
-                .filter(|n| {
-                    n.parent_id.is_none() && disk::folded(&n.name) == disk::folded(remote_folder)
-                })
-                .cloned()
-                .collect();
-            let node = match matches.as_slice() {
-                [node] if node.kind == Kind::Directory => node.clone(),
-                [] => remote.create(
-                    remote_folder,
-                    None,
-                    Kind::Directory,
-                    None,
-                    0,
-                    &mut snapshot.state,
-                )?,
-                _ => bail!("Remote sync folder is ambiguous or is not a directory"),
-            };
-            if !snapshot.nodes.iter().any(|n| n.id == node.id) {
-                snapshot.nodes.push(node.clone());
-            }
+            let node = ensure_folder_path(remote, &mut snapshot, &remote_folder)?;
             store.set_meta("remote_root_id", &node.id)?;
             node.id
         }
     });
     let mut tree = jmap::scoped_tree(&snapshot, root_id.as_deref())?;
     let mut base = store.baselines()?;
+    let exclusions = crate::exclusions::Exclusions::new(&config.exclude_patterns)?;
+    let mut oversized = scanner.oversized().clone();
+    let oversized_downloads: Vec<_> = tree
+        .iter()
+        .filter(|(path, node)| {
+            node.kind == Kind::File && node.size > config.file_limit() && !exclusions.matches(path)
+        })
+        .map(|(path, node)| (path.clone(), node.size))
+        .collect();
+    for (path, size) in &oversized_downloads {
+        oversized.entry(path.clone()).or_insert(*size);
+    }
+    let protected = exclusions.scope(
+        &mut local,
+        &mut tree,
+        &mut base,
+        scanner.omitted_paths().chain(oversized.keys()),
+    );
+    for (path, size) in scanner.oversized() {
+        crate::activity::size_limit(path, *size, upload_limit);
+    }
+    for (path, size) in oversized_downloads {
+        if !scanner.oversized().contains_key(&path) {
+            crate::activity::size_limit(&path, size, config.file_limit());
+        }
+    }
+    local.retain(|path, _| !oversized.contains_key(path));
+    tree.retain(|path, _| !oversized.contains_key(path));
+    base.retain(|path, _| !oversized.contains_key(path));
     let deferred = scanner.deferred_roots();
+    for path in scanner.deferred_paths().take(100) {
+        crate::activity::notice(path, "check", "waiting");
+    }
     let allowed = |path: &str| {
         !deferred
             .iter()
@@ -123,6 +137,7 @@ pub fn sync_with_scanner<R: Remote>(
         &local,
         &tree,
         &base,
+        &protected,
         &mut snapshot.state,
         log,
     )? {
@@ -132,16 +147,19 @@ pub fn sync_with_scanner<R: Remote>(
             ..Report::default()
         });
     }
-    let actions = planner::plan(&local, &tree, &base, config)?;
+    let actions = planner::plan_protected(&local, &tree, &base, config, &protected)?;
     let mut report = Report {
         deferred: deferred.len(),
+        limited: oversized.len(),
         ..Report::default()
     };
     if !deferred.is_empty() {
         log(Message::new("log.deferred").with("count", deferred.len()));
     }
-    let mut trash_id: Option<String> = None;
-    for action in actions {
+    let mut history_id: Option<String> = None;
+    let mut actions = std::collections::VecDeque::from(actions);
+    let mut prepared = HashMap::<String, crate::uploads::Prepared>::new();
+    while let Some(action) = actions.pop_front() {
         crate::runtime::check()?;
         if cancel.load(Ordering::Relaxed) {
             bail!("Synchronization paused");
@@ -149,6 +167,7 @@ pub fn sync_with_scanner<R: Remote>(
         let path = action.path().to_owned();
         let expected = local.get(&path);
         if matches!(action, Action::Blocked(_)) {
+            crate::activity::notice(&path, "trash", "blocked");
             report.blocked += 1;
             continue;
         }
@@ -166,7 +185,7 @@ pub fn sync_with_scanner<R: Remote>(
             }) {
                 continue;
             }
-            disk::verify_local(&config.local_folder, &path, Some(l), config.max_file_bytes)?;
+            disk::verify_local(&config.local_folder, &path, Some(l), config.file_limit())?;
             store.record(&path, l, node)?;
             continue;
         }
@@ -174,11 +193,54 @@ pub fn sync_with_scanner<R: Remote>(
             let target = disk::checked_path(&config.local_folder, &path)?;
             if disk::open_snapshot(&target).is_err() {
                 report.deferred += 1;
+                crate::activity::notice(&path, "check", "waiting");
                 log(Message::new("log.busy").with("path", &path));
                 continue;
             }
         }
         let op = store.begin(&action)?;
+        if matches!(action, Action::Upload(_)) && prepared.is_empty() {
+            let count = remote.upload_limits().effective_parallelism(config);
+            if count > 1 {
+                if let Some(uploader) = remote.uploader() {
+                    let files = std::iter::once(&action)
+                        .chain(
+                            actions
+                                .iter()
+                                .take_while(|next| matches!(next, Action::Upload(_))),
+                        )
+                        .take(count)
+                        .map(|next| (next.path().to_owned(), local[next.path()].clone()))
+                        .collect();
+                    prepared = crate::uploads::prepare(config, uploader, files);
+                }
+            }
+        }
+        let mut prefetched = prepared.remove(&path);
+        let operation = match &action {
+            Action::Upload(_) => "upload",
+            Action::Download(_) | Action::Reconcile(_) => "download",
+            Action::DeleteLocal(_) | Action::DeleteRemote(_) => "trash",
+            Action::Conflict(_) => "compare",
+            _ => "folder",
+        };
+        let bytes = if operation == "upload" {
+            expected.map_or(0, |entry| entry.size)
+        } else if operation == "download" {
+            tree.get(&path).map_or(0, |entry| entry.size)
+        } else {
+            0
+        };
+        let completed_bytes = if prefetched
+            .as_ref()
+            .is_some_and(|item| item.blob.as_ref().is_some_and(Result::is_ok))
+        {
+            bytes
+        } else {
+            0
+        };
+        let mut activity =
+            crate::activity::FileActivity::begin_at(&path, operation, bytes, completed_bytes);
         let completed = match &action {
             Action::Upload(_) => "log.uploaded",
             Action::Download(_) => "log.downloaded",
@@ -189,7 +251,7 @@ pub fn sync_with_scanner<R: Remote>(
         match action {
             Action::CreateLocalDir(_) => {
                 check_state(remote, &snapshot.state)?;
-                disk::verify_local(&config.local_folder, &path, expected, config.max_file_bytes)?;
+                disk::verify_local(&config.local_folder, &path, expected, config.file_limit())?;
                 fs::create_dir(disk::checked_path(&config.local_folder, &path)?)?;
                 let local = LocalEntry {
                     kind: Kind::Directory,
@@ -200,7 +262,7 @@ pub fn sync_with_scanner<R: Remote>(
                 report.downloaded += 1;
             }
             Action::CreateRemoteDir(_) => {
-                disk::verify_local(&config.local_folder, &path, expected, config.max_file_bytes)?;
+                disk::verify_local(&config.local_folder, &path, expected, config.file_limit())?;
                 let (parent, name) = parent_and_name(&tree, root_id.as_deref(), &path)?;
                 let node = remote.create(
                     name,
@@ -220,36 +282,30 @@ pub fn sync_with_scanner<R: Remote>(
                     &config.local_folder,
                     &path,
                     Some(expected),
-                    config.max_file_bytes,
+                    config.file_limit(),
                 )?;
-                let source = disk::checked_path(&config.local_folder, &path)?;
-                let staged = tempfile::NamedTempFile::new_in(
-                    config
-                        .local_folder
-                        .join(disk::PRIVATE_DIR)
-                        .join("transfers"),
-                )?
-                .into_temp_path();
-                // Close the creating write handle before a deny-write snapshot is opened.
-                disk::stage_snapshot(&source, &staged)?;
-                if &disk::hash_file(&staged, config.max_file_bytes)? != expected {
-                    bail!("File changed while preparing upload: {path}");
-                }
-                let blob = remote.upload(&staged, expected.size)?;
+                let blob = if let Some(item) = &mut prefetched {
+                    item.blob
+                        .take()
+                        .context("Prepared upload was already consumed")??
+                } else {
+                    let staged = crate::uploads::stage(config, &path, expected)?;
+                    remote.upload(&staged, expected.size)?
+                };
                 disk::verify_local(
                     &config.local_folder,
                     &path,
                     Some(expected),
-                    config.max_file_bytes,
+                    config.file_limit(),
                 )?;
                 let (parent, name) = parent_and_name(&tree, root_id.as_deref(), &path)?;
                 let node = if let Some(previous) = tree.get(&path) {
-                    let trash = ensure_trash(
+                    let trash = ensure_version_history(
                         remote,
                         store,
                         root_id.as_deref(),
                         &snapshot.nodes,
-                        &mut trash_id,
+                        &mut history_id,
                         &mut snapshot.state,
                     )?;
                     let backup_name = format!(
@@ -290,9 +346,9 @@ pub fn sync_with_scanner<R: Remote>(
                 let node = tree.get(&path).context("Download requires a remote file")?;
                 let staged = jmap::transfer_path(&config.local_folder, node);
                 remote.download(node, &staged)?;
-                let incoming = disk::hash_file(&staged, config.max_file_bytes)?;
+                let incoming = disk::hash_file(&staged, config.file_limit())?;
                 check_state(remote, &snapshot.state)?;
-                disk::verify_local(&config.local_folder, &path, expected, config.max_file_bytes)?;
+                disk::verify_local(&config.local_folder, &path, expected, config.file_limit())?;
                 if expected == Some(&incoming) {
                     fs::remove_file(&staged)?;
                 } else {
@@ -318,7 +374,7 @@ pub fn sync_with_scanner<R: Remote>(
             }
             Action::Conflict(_) => {
                 check_state(remote, &snapshot.state)?;
-                disk::verify_local(&config.local_folder, &path, expected, config.max_file_bytes)?;
+                disk::verify_local(&config.local_folder, &path, expected, config.file_limit())?;
                 let conflict = disk::conflict_path(&config.local_folder, &path)?;
                 fs::rename(
                     disk::checked_path(&config.local_folder, &path)?,
@@ -329,11 +385,12 @@ pub fn sync_with_scanner<R: Remote>(
                 report.conflicts += 1;
                 report.needs_rescan = true;
                 store.done(&op)?;
+                activity.finish("warning");
                 return Ok(report);
             }
             Action::DeleteLocal(_) => {
                 check_state(remote, &snapshot.state)?;
-                disk::verify_local(&config.local_folder, &path, expected, config.max_file_bytes)?;
+                disk::verify_local(&config.local_folder, &path, expected, config.file_limit())?;
                 let target = disk::checked_path(&config.local_folder, &path)?;
                 if target.is_dir() && fs::read_dir(&target)?.next().is_some() {
                     bail!("Directory is not empty; preserving new local files: {path}");
@@ -343,24 +400,45 @@ pub fn sync_with_scanner<R: Remote>(
                 report.recycled += 1;
             }
             Action::DeleteRemote(_) => {
-                disk::verify_local(&config.local_folder, &path, None, config.max_file_bytes)?;
-                let trash = ensure_trash(
-                    remote,
-                    store,
-                    root_id.as_deref(),
-                    &snapshot.nodes,
-                    &mut trash_id,
+                disk::verify_local(&config.local_folder, &path, None, config.file_limit())?;
+                let trash = ensure_server_trash(remote, &mut snapshot)?;
+                let node = &tree[&path];
+                // Bulwark-compatible batch names retain the original parent for Restore.
+                let parent = node.parent_id.as_deref().unwrap_or("");
+                if !parent
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+                {
+                    bail!("Parent ID cannot be represented in the interoperable trash format");
+                }
+                let newest = snapshot
+                    .nodes
+                    .iter()
+                    .filter(|entry| entry.parent_id.as_deref() == Some(&trash))
+                    .filter_map(|entry| entry.name.split_once('~')?.0.parse::<i64>().ok())
+                    .max()
+                    .unwrap_or(0);
+                let timestamp = chrono::Utc::now()
+                    .timestamp_millis()
+                    .max(newest.saturating_add(1));
+                let batch = remote.create(
+                    &format!("{timestamp}~{parent}"),
+                    Some(&trash),
+                    Kind::Directory,
+                    None,
+                    0,
                     &mut snapshot.state,
                 )?;
-                let node = &tree[&path];
-                let name = format!(
-                    "{}-{}",
-                    uuid::Uuid::new_v4().simple(),
-                    node.name.chars().take(100).collect::<String>()
-                );
-                remote.update(node, &name, Some(&trash), None, &mut snapshot.state)?;
-                store.forget(&path)?;
-                tree.remove(&path);
+                let batch_id = batch.id.clone();
+                snapshot.nodes.push(batch);
+                let moved =
+                    remote.update(node, &node.name, Some(&batch_id), None, &mut snapshot.state)?;
+                if let Some(previous) = snapshot.nodes.iter_mut().find(|entry| entry.id == moved.id)
+                {
+                    *previous = moved;
+                }
+                store.forget_tree(&path)?;
+                tree.retain(|entry, _| entry != &path && !entry.starts_with(&format!("{path}/")));
                 report.recycled += 1;
             }
             Action::MoveLocal { .. }
@@ -370,9 +448,72 @@ pub fn sync_with_scanner<R: Remote>(
             | Action::Blocked(_) => unreachable!(),
         }
         store.done(&op)?;
+        if let Some(item) = &mut prefetched {
+            item.committed = true;
+        }
+        activity.finish("synced");
         log(Message::new(completed).with("path", &path));
     }
     Ok(report)
+}
+
+pub fn find_folder_path(snapshot: &Snapshot, path: &str) -> Result<Option<String>> {
+    Config::validate_remote_path(path)?;
+    let mut parent = None;
+    for name in path.split('/') {
+        let matches: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.parent_id == parent && disk::folded(&node.name) == disk::folded(name)
+            })
+            .collect();
+        match matches.as_slice() {
+            [node] if node.kind == Kind::Directory => parent = Some(node.id.clone()),
+            [] => return Ok(None),
+            _ => bail!("Remote sync folder is ambiguous or is not a directory"),
+        }
+    }
+    Ok(parent)
+}
+
+fn ensure_folder_path<R: Remote>(
+    remote: &mut R,
+    snapshot: &mut Snapshot,
+    path: &str,
+) -> Result<Node> {
+    Config::validate_remote_path(path)?;
+    let mut parent = None;
+    let mut result = None;
+    for name in path.split('/') {
+        let matches: Vec<_> = snapshot
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.parent_id == parent && disk::folded(&node.name) == disk::folded(name)
+            })
+            .cloned()
+            .collect();
+        let node = match matches.as_slice() {
+            [node] if node.kind == Kind::Directory => node.clone(),
+            [] => {
+                let node = remote.create(
+                    name,
+                    parent.as_deref(),
+                    Kind::Directory,
+                    None,
+                    0,
+                    &mut snapshot.state,
+                )?;
+                snapshot.nodes.push(node.clone());
+                node
+            }
+            _ => bail!("Remote sync folder is ambiguous or is not a directory"),
+        };
+        parent = Some(node.id.clone());
+        result = Some(node);
+    }
+    result.context("Remote folder path is empty")
 }
 
 fn check_state<R: Remote>(remote: &R, expected: &str) -> Result<()> {
@@ -382,7 +523,43 @@ fn check_state<R: Remote>(remote: &R, expected: &str) -> Result<()> {
     Ok(())
 }
 
-fn ensure_trash<R: Remote>(
+fn ensure_server_trash<R: Remote>(remote: &mut R, snapshot: &mut Snapshot) -> Result<String> {
+    let matches: Vec<_> = snapshot
+        .nodes
+        .iter()
+        .filter(|node| {
+            node.role.as_deref() == Some("trash")
+                || (node.parent_id.is_none() && node.name == ".Trash")
+        })
+        .collect();
+    match matches.as_slice() {
+        [node] if node.kind == Kind::Directory => {
+            check_state(remote, &snapshot.state)?;
+            Ok(node.id.clone())
+        }
+        [] => {
+            let parent = snapshot
+                .nodes
+                .iter()
+                .find(|node| node.kind == Kind::Directory && node.role.as_deref() == Some("root"))
+                .map(|node| node.id.clone());
+            let node = remote.create_trash(parent.as_deref(), &mut snapshot.state)?;
+            if node.kind != Kind::Directory
+                || (node.role.as_deref() != Some("trash")
+                    && !(node.parent_id.is_none() && node.name == ".Trash"))
+            {
+                bail!("Server did not create a valid trash directory");
+            }
+            let id = node.id.clone();
+            snapshot.nodes.push(node);
+            Ok(id)
+        }
+        _ => bail!("Server trash role is ambiguous or invalid"),
+    }
+}
+
+// Private overwritten-version storage is distinct from the account's trash role.
+fn ensure_version_history<R: Remote>(
     remote: &mut R,
     store: &Store,
     root: Option<&str>,
@@ -396,7 +573,7 @@ fn ensure_trash<R: Remote>(
     }
     let matches: Vec<_> = nodes
         .iter()
-        .filter(|n| n.parent_id.as_deref() == root && disk::folded(&n.name) == disk::REMOTE_TRASH)
+        .filter(|n| n.parent_id.as_deref() == root && disk::folded(&n.name) == disk::REMOTE_HISTORY)
         .collect();
     let id = match matches.as_slice() {
         [node] if node.kind == Kind::Directory => {
@@ -405,12 +582,12 @@ fn ensure_trash<R: Remote>(
         }
         [] => {
             remote
-                .create(disk::REMOTE_TRASH, root, Kind::Directory, None, 0, state)?
+                .create(disk::REMOTE_HISTORY, root, Kind::Directory, None, 0, state)?
                 .id
         }
         _ => bail!("Invalid remote recovery storage"),
     };
-    store.set_meta("trash_id", &id)?;
+    store.set_meta("history_id", &id)?;
     *cached = Some(id.clone());
     Ok(id)
 }
@@ -444,6 +621,7 @@ fn reconcile_rename<R: Remote>(
     local: &LocalTree,
     tree: &RemoteTree,
     base: &Baselines,
+    protected: &std::collections::HashSet<String>,
     state: &mut String,
     log: &mut dyn FnMut(Message),
 ) -> Result<bool> {
@@ -451,7 +629,13 @@ fn reconcile_rename<R: Remote>(
     let mut entries: Vec<_> = base.iter().collect();
     entries.sort_by_key(|(p, _)| p.split('/').count());
     for (old, b) in &entries {
+        if protected.contains(*old) {
+            continue;
+        }
         if let Some((new, _node)) = by_id.get(b.remote_id.as_str()) {
+            if protected.contains(*new) {
+                continue;
+            }
             if *old != *new && local.contains_key(*old) && !local.contains_key(*new) {
                 let destination = disk::checked_path(&config.local_folder, new)?;
                 if !destination.parent().is_some_and(Path::is_dir) {
@@ -462,7 +646,7 @@ fn reconcile_rename<R: Remote>(
                     &config.local_folder,
                     old,
                     local.get(*old),
-                    config.max_file_bytes,
+                    config.file_limit(),
                 )?;
                 let op = store.begin(&Action::MoveLocal {
                     from: (*old).clone(),
@@ -474,6 +658,7 @@ fn reconcile_rename<R: Remote>(
                 log(Message::new("log.remote_rename")
                     .with("from", old)
                     .with("to", new));
+                crate::activity::renamed(old, new);
                 return Ok(true);
             }
         }
@@ -504,13 +689,8 @@ fn reconcile_rename<R: Remote>(
         let Ok((parent, name)) = parent_and_name(tree, root.as_deref(), new) else {
             continue;
         };
-        disk::verify_local(&config.local_folder, old, None, config.max_file_bytes)?;
-        disk::verify_local(
-            &config.local_folder,
-            new,
-            Some(value),
-            config.max_file_bytes,
-        )?;
+        disk::verify_local(&config.local_folder, old, None, config.file_limit())?;
+        disk::verify_local(&config.local_folder, new, Some(value), config.file_limit())?;
         let op = store.begin(&Action::MoveRemote {
             from: old.clone(),
             to: new.clone(),
@@ -521,6 +701,7 @@ fn reconcile_rename<R: Remote>(
         log(Message::new("log.local_rename")
             .with("from", old)
             .with("to", new));
+        crate::activity::renamed(old, new);
         return Ok(true);
     }
     Ok(false)

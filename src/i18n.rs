@@ -65,6 +65,13 @@ pub struct Message {
 }
 
 impl Message {
+    pub fn prefix_paths(&mut self, prefix: &str) {
+        for (key, value) in &mut self.arguments {
+            if matches!(*key, "path" | "to") {
+                *value = format!("{prefix}/{value}");
+            }
+        }
+    }
     pub fn argument(&self, key: &str) -> Option<&str> {
         self.arguments
             .iter()

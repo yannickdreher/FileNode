@@ -22,6 +22,13 @@ use std::{
 use url::Url;
 
 pub trait Remote {
+    fn uploader(&self) -> Option<Arc<dyn Uploader>> {
+        None
+    }
+    fn upload_limits(&self) -> UploadLimits {
+        UploadLimits::default()
+    }
+    fn create_trash(&mut self, parent: Option<&str>, state: &mut String) -> Result<Node>;
     fn account_id(&self) -> &str;
     fn current_state(&self) -> Result<String>;
     fn snapshot(&mut self, previous: Option<&Snapshot>) -> Result<Snapshot>;
@@ -45,8 +52,41 @@ pub trait Remote {
         state: &mut String,
     ) -> Result<Node>;
 }
+pub trait Uploader: Send + Sync {
+    fn send_blob(&self, path: &Path, size: u64) -> Result<String>;
+    fn policy(&self) -> Arc<crate::runtime::Policy>;
+}
 
+#[derive(Clone, Copy, Default, serde::Serialize)]
+pub struct UploadLimits {
+    pub max_size_upload: Option<u64>,
+    pub max_concurrent_upload: Option<usize>,
+}
+impl UploadLimits {
+    pub fn effective_size(self, config: &Config) -> u64 {
+        self.max_size_upload
+            .unwrap_or(if config.max_file_bytes == 0 {
+                1024 * 1024 * 1024
+            } else {
+                config.max_file_bytes
+            })
+            .min(config.file_limit())
+    }
+    pub fn effective_parallelism(self, config: &Config) -> usize {
+        config
+            .parallel_uploads
+            .min(self.max_concurrent_upload.unwrap_or(1))
+            .clamp(1, 16)
+    }
+}
+
+#[derive(Clone)]
 pub struct Jmap {
+    push_url: Option<Url>,
+    push: Option<Arc<crate::push::Push>>,
+    limits: UploadLimits,
+    parallel_uploads: usize,
+    web_trash_url: Option<String>,
     client: Client,
     origin: Url,
     api: Url,
@@ -176,6 +216,34 @@ impl Jmap {
             .context("downloadUrl is missing")?
             .to_owned();
         let this = Self {
+            push_url: crate::push::endpoint(
+                &origin,
+                &session["capabilities"]["urn:ietf:params:jmap:websocket"],
+            ),
+            push: None,
+            parallel_uploads: config.parallel_uploads,
+            limits: UploadLimits {
+                max_size_upload: session["capabilities"]["urn:ietf:params:jmap:core"]
+                    ["maxSizeUpload"]
+                    .as_u64(),
+                max_concurrent_upload: session["capabilities"]["urn:ietf:params:jmap:core"]
+                    ["maxConcurrentUpload"]
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n > 0),
+            },
+            web_trash_url: account["accountCapabilities"][FILE_CAPABILITY]["webTrashUrl"]
+                .as_str()
+                .and_then(|value| {
+                    let url = origin.join(value).ok()?;
+                    if url.scheme() != "https"
+                        || !url.username().is_empty()
+                        || url.password().is_some()
+                    {
+                        return None;
+                    }
+                    Some(url.to_string())
+                }),
             client,
             origin,
             api,
@@ -185,7 +253,7 @@ impl Jmap {
             account_id,
             modern,
             cancel,
-            max_bytes: config.max_file_bytes,
+            max_bytes: config.file_limit(),
             policy,
         };
         this.expand(&this.upload_url, None)?;
@@ -195,6 +263,22 @@ impl Jmap {
 
     pub fn set_policy(&mut self, policy: Arc<crate::runtime::Policy>) {
         self.policy = policy;
+        self.start_push();
+    }
+    pub fn start_push(&mut self) {
+        if self.push.is_none() {
+            if let Some(url) = &self.push_url {
+                self.push = Some(crate::push::Push::start(
+                    url.clone(),
+                    self.authentication.clone(),
+                    self.account_id.clone(),
+                    self.policy.clone(),
+                ));
+            }
+        }
+    }
+    pub fn take_remote_change(&self) -> bool {
+        self.push.as_ref().is_some_and(|push| push.take_change())
     }
 
     fn transfer_timeout(&self, size: u64, upload: bool) -> Duration {
@@ -206,7 +290,19 @@ impl Jmap {
         .load(Ordering::Relaxed);
         Duration::from_secs(
             size.checked_div(rate)
-                .map(|seconds| seconds + 180)
+                .map(|seconds| {
+                    seconds
+                        .saturating_mul(if upload {
+                            self.limits
+                                .max_concurrent_upload
+                                .unwrap_or(1)
+                                .min(self.parallel_uploads)
+                                .clamp(1, 16) as u64
+                        } else {
+                            1
+                        })
+                        .saturating_add(180)
+                })
                 .unwrap_or(120),
         )
     }
@@ -418,30 +514,99 @@ impl Jmap {
             .into();
         Ok(result)
     }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_with_role(
+        &mut self,
+        name: &str,
+        parent: Option<&str>,
+        kind: Kind,
+        blob: Option<&str>,
+        size: u64,
+        state: &mut String,
+        role: Option<&str>,
+    ) -> Result<Node> {
+        let mut node = json!({"name":name,"parentId":parent});
+        if let Some(role) = role {
+            node["role"] = json!(role);
+        }
+        if self.modern {
+            node["@type"] = json!(if kind == Kind::Directory {
+                "Directory"
+            } else {
+                "File"
+            });
+        } else {
+            node["nodeType"] = json!(if kind == Kind::Directory {
+                "directory"
+            } else {
+                "file"
+            });
+        }
+        if let Some(blob) = blob {
+            node["blobId"] = json!(blob);
+            node[if self.modern { "mediaType" } else { "type" }] =
+                json!("application/octet-stream");
+        }
+        let result = self.mutate(json!({"create":{"drive":node}}), state)?;
+        let id = result["created"]["drive"]["id"]
+            .as_str()
+            .context("Create response has no file ID")?;
+        self.read_written_node(
+            Node {
+                id: id.into(),
+                name: name.into(),
+                parent_id: parent.map(str::to_owned),
+                blob_id: blob.map(str::to_owned),
+                kind,
+                size,
+                role: role.map(str::to_owned),
+            },
+            state,
+        )
+    }
+
+    fn read_written_node(&self, expected: Node, state: &str) -> Result<Node> {
+        // Upload IDs can be temporary. Stalwart returns a different linked blob ID
+        // once content belongs to a FileNode. Persist the server's actual identity.
+        let snapshot = self.get_nodes(std::slice::from_ref(&expected.id))?;
+        if snapshot.state != state {
+            bail!("Server changed while confirming the write; reconcile before retrying");
+        }
+        let [node] = snapshot.nodes.as_slice() else {
+            bail!("Written FileNode was not returned exactly once");
+        };
+        if node.id != expected.id
+            || node.name != expected.name
+            || node.parent_id != expected.parent_id
+            || node.kind != expected.kind
+            || node.role != expected.role
+            || (node.kind == Kind::File && node.size != expected.size)
+        {
+            bail!("Written FileNode does not match the requested operation");
+        }
+        Ok(node.clone())
+    }
+    pub fn web_trash_url(&self) -> Option<&str> {
+        self.web_trash_url.as_deref()
+    }
 }
 
-impl Remote for Jmap {
-    fn account_id(&self) -> &str {
-        &self.account_id
+impl Uploader for Jmap {
+    fn send_blob(&self, path: &Path, size: u64) -> Result<String> {
+        self.upload_blob(path, size)
     }
-    fn current_state(&self) -> Result<String> {
-        Ok(self.get_nodes(&[])?.state)
+    fn policy(&self) -> Arc<crate::runtime::Policy> {
+        self.policy.clone()
     }
-    fn snapshot(&mut self, previous: Option<&Snapshot>) -> Result<Snapshot> {
-        if let Some(previous) = previous {
-            match self.incremental(previous) {
-                Ok(snapshot) => return Ok(snapshot),
-                Err(e)
-                    if e.to_string().contains("cannotCalculateChanges")
-                        || e.to_string().contains("unknownMethod") => {}
-                Err(e) => return Err(e),
-            }
-        }
-        self.full_snapshot()
-    }
-
-    fn upload(&mut self, path: &Path, size: u64) -> Result<String> {
-        if size > self.max_bytes {
+}
+impl Jmap {
+    fn upload_blob(&self, path: &Path, size: u64) -> Result<String> {
+        if size
+            > self
+                .max_bytes
+                .min(self.limits.max_size_upload.unwrap_or(self.max_bytes))
+        {
             bail!("Upload exceeds the file size limit");
         }
         let file = File::open(path)?;
@@ -468,6 +633,37 @@ impl Remote for Jmap {
             .as_str()
             .context("Upload response has no blobId")?
             .into())
+    }
+}
+
+impl Remote for Jmap {
+    fn uploader(&self) -> Option<Arc<dyn Uploader>> {
+        Some(Arc::new(self.clone()))
+    }
+    fn upload_limits(&self) -> UploadLimits {
+        self.limits
+    }
+    fn account_id(&self) -> &str {
+        &self.account_id
+    }
+    fn current_state(&self) -> Result<String> {
+        Ok(self.get_nodes(&[])?.state)
+    }
+    fn snapshot(&mut self, previous: Option<&Snapshot>) -> Result<Snapshot> {
+        if let Some(previous) = previous {
+            match self.incremental(previous) {
+                Ok(snapshot) => return Ok(snapshot),
+                Err(e)
+                    if e.to_string().contains("cannotCalculateChanges")
+                        || e.to_string().contains("unknownMethod") => {}
+                Err(e) => return Err(e),
+            }
+        }
+        self.full_snapshot()
+    }
+
+    fn upload(&mut self, path: &Path, size: u64) -> Result<String> {
+        self.upload_blob(path, size)
     }
 
     fn download(&mut self, node: &Node, path: &Path) -> Result<()> {
@@ -523,6 +719,8 @@ impl Remote for Jmap {
             .truncate(!append)
             .open(path)?;
         let mut total = if append { offset } else { 0 };
+        let progress = crate::activity::Progress::current();
+        progress.set(total);
         let mut buffer = [0u8; 16384];
         let mut budget = crate::runtime::Budget::new(self.policy.clone(), false);
         loop {
@@ -540,12 +738,25 @@ impl Remote for Jmap {
             }
             budget.reserve(n)?;
             output.write_all(&buffer[..n])?;
+            progress.set(total);
         }
         output.sync_all()?;
         if total != node.size {
             bail!("Incomplete download; resume on the next run");
         }
         Ok(())
+    }
+
+    fn create_trash(&mut self, parent: Option<&str>, state: &mut String) -> Result<Node> {
+        self.create_with_role(
+            ".Trash",
+            parent,
+            Kind::Directory,
+            None,
+            0,
+            state,
+            if self.modern { Some("trash") } else { None },
+        )
     }
 
     fn create(
@@ -557,37 +768,7 @@ impl Remote for Jmap {
         size: u64,
         state: &mut String,
     ) -> Result<Node> {
-        let mut node = json!({"name":name,"parentId":parent});
-        if self.modern {
-            node["@type"] = json!(if kind == Kind::Directory {
-                "Directory"
-            } else {
-                "File"
-            });
-        } else {
-            node["nodeType"] = json!(if kind == Kind::Directory {
-                "directory"
-            } else {
-                "file"
-            });
-        }
-        if let Some(blob) = blob {
-            node["blobId"] = json!(blob);
-            node[if self.modern { "mediaType" } else { "type" }] =
-                json!("application/octet-stream");
-        }
-        let result = self.mutate(json!({"create":{"drive":node}}), state)?;
-        let id = result["created"]["drive"]["id"]
-            .as_str()
-            .context("Create response has no file ID")?;
-        Ok(Node {
-            id: id.into(),
-            name: name.into(),
-            parent_id: parent.map(str::to_owned),
-            blob_id: blob.map(str::to_owned),
-            kind,
-            size,
-        })
+        self.create_with_role(name, parent, kind, blob, size, state, None)
     }
 
     fn update(
@@ -614,7 +795,7 @@ impl Remote for Jmap {
             updated.blob_id = Some(blob.into());
             updated.size = size;
         }
-        Ok(updated)
+        self.read_written_node(updated, state)
     }
 }
 
@@ -653,6 +834,7 @@ fn parse_node(raw: &Value) -> Result<Node> {
         name: raw["name"].as_str().context("File name is missing")?.into(),
         parent_id: raw["parentId"].as_str().map(str::to_owned),
         blob_id: raw["blobId"].as_str().map(str::to_owned),
+        role: raw["role"].as_str().map(str::to_owned),
         kind,
         size: raw["size"].as_u64().unwrap_or(0),
     };
@@ -671,6 +853,24 @@ pub fn scoped_tree(snapshot: &Snapshot, root_id: Option<&str>) -> Result<RemoteT
     if root_id.is_some_and(|id| all.get(id).is_none_or(|n| n.kind != Kind::Directory)) {
         bail!("Remote sync folder disappeared; synchronization blocked");
     }
+    if let Some(root) = root_id {
+        let mut current = all.get(root).copied();
+        let mut seen = HashSet::new();
+        while let Some(node) = current {
+            if !seen.insert(&node.id) {
+                bail!("Remote root ancestry is cyclic");
+            }
+            if node.role.as_deref() == Some("trash")
+                || (node.parent_id.is_none() && node.name == ".Trash")
+            {
+                bail!("Selected remote folder is in the trash; synchronization blocked");
+            }
+            current = node
+                .parent_id
+                .as_deref()
+                .and_then(|parent| all.get(parent).copied());
+        }
+    }
     let mut result = RemoteTree::new();
     let mut names = HashSet::new();
     for node in &snapshot.nodes {
@@ -683,6 +883,11 @@ pub fn scoped_tree(snapshot: &Snapshot, root_id: Option<&str>) -> Result<RemoteT
         let in_scope = loop {
             if !seen.insert(&current.id) || seen.len() > 128 {
                 bail!("Remote directory tree is cyclic or too deep");
+            }
+            if current.role.as_deref() == Some("trash")
+                || (current.parent_id.is_none() && current.name == ".Trash")
+            {
+                break false;
             }
             match current.parent_id.as_deref() {
                 Some(parent) if Some(parent) == root_id => break true,
@@ -741,6 +946,7 @@ mod tests {
             name: "docs".into(),
             parent_id: None,
             blob_id: None,
+            role: None,
             kind: Kind::Directory,
             size: 0,
         };
@@ -749,6 +955,7 @@ mod tests {
             name: "a.txt".into(),
             parent_id: Some("dir".into()),
             blob_id: Some("blob".into()),
+            role: None,
             kind: Kind::File,
             size: 1,
         };
@@ -858,9 +1065,252 @@ mod tests {
     }
 
     #[test]
+    fn advertised_upload_limits_are_discovered_and_enforced_before_sending() {
+        let (address, worker) = server(1, |_, _| {
+            let mut value = session(true);
+            value["capabilities"]["urn:ietf:params:jmap:core"] =
+                json!({"maxSizeUpload":4,"maxConcurrentUpload":3});
+            response("200 OK", "", &value.to_string())
+        });
+        let config = Config {
+            server: address,
+            username: "user".into(),
+            parallel_uploads: 8,
+            ..Default::default()
+        };
+        let mut remote = Jmap::connect_inner(
+            &config,
+            "test".into(),
+            Arc::new(AtomicBool::new(false)),
+            true,
+        )
+        .unwrap();
+        assert_eq!(remote.upload_limits().effective_size(&config), 4);
+        assert_eq!(remote.upload_limits().effective_parallelism(&config), 3);
+        // The path need not exist: rejection happens before opening or posting it.
+        assert!(remote.upload(Path::new("unused"), 5).is_err());
+        let mut lowered = config.clone();
+        lowered.max_file_bytes = 2;
+        lowered.parallel_uploads = 1;
+        assert_eq!(remote.upload_limits().effective_size(&lowered), 2);
+        assert_eq!(remote.upload_limits().effective_parallelism(&lowered), 1);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn disconnected_upload_retries_the_complete_snapshot_without_publishing_partial_content() {
+        let (address, worker) = server(3, |index, request| {
+            if index == 0 {
+                return response("200 OK", "", &session(false).to_string());
+            }
+            assert_eq!(request.body, b"complete snapshot");
+            if index == 1 {
+                return String::new();
+            } // Network drops before acknowledgment.
+            response(
+                "200 OK",
+                "",
+                &json!({"accountId":"account","blobId":"complete","size":17}).to_string(),
+            )
+        });
+        let config = Config {
+            server: address,
+            username: "user".into(),
+            ..Default::default()
+        };
+        let mut remote = Jmap::connect_inner(
+            &config,
+            "test".into(),
+            Arc::new(AtomicBool::new(false)),
+            true,
+        )
+        .unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        let file = folder.path().join("snapshot");
+        std::fs::write(&file, b"complete snapshot").unwrap();
+        assert!(remote.upload(&file, 17).is_err());
+        assert_eq!(remote.upload(&file, 17).unwrap(), "complete");
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn server_trash_creation_supports_legacy_stalwart_and_directory_roles() {
+        for modern in [false, true] {
+            let (address, worker) = server(3, move |index, request| {
+                if index == 0 {
+                    return response("200 OK", "", &session(modern).to_string());
+                }
+                let request: Value = serde_json::from_slice(&request.body).unwrap();
+                let method = request["methodCalls"][0][0].as_str().unwrap();
+                let args = &request["methodCalls"][0][1];
+                let result = if index == 1 {
+                    assert_eq!(method, "FileNode/set");
+                    assert_eq!(args["create"]["drive"]["name"], ".Trash");
+                    assert_eq!(
+                        args["create"]["drive"]["role"],
+                        if modern { json!("trash") } else { Value::Null }
+                    );
+                    json!({"oldState":"0","newState":"1","created":{"drive":{"id":"trash"}}})
+                } else {
+                    assert_eq!(method, "FileNode/get");
+                    let mut node = json!({"id":"trash","name":".Trash","parentId":null,"role":if modern { Some("trash") } else { None }});
+                    node[if modern { "@type" } else { "nodeType" }] =
+                        json!(if modern { "Directory" } else { "directory" });
+                    json!({"state":"1","list":[node],"notFound":[]})
+                };
+                response(
+                    "200 OK",
+                    "",
+                    &json!({"methodResponses":[[method,result,"drive"]]}).to_string(),
+                )
+            });
+            let config = Config {
+                server: address,
+                username: "user@example.org".into(),
+                ..Default::default()
+            };
+            let mut remote = Jmap::connect_inner(
+                &config,
+                "secret".into(),
+                Arc::new(AtomicBool::new(false)),
+                true,
+            )
+            .unwrap();
+            let trash = remote.create_trash(None, &mut "0".into()).unwrap();
+            assert_eq!(trash.name, ".Trash");
+            assert_eq!(
+                trash.role.as_deref(),
+                if modern { Some("trash") } else { None }
+            );
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn own_upload_is_not_downloaded_when_the_server_returns_a_linked_blob_id() {
+        use crate::{engine, store::Store};
+        use std::sync::atomic::AtomicUsize;
+        for modern in [false, true] {
+            let folder = tempfile::tempdir().unwrap();
+            let root_name = folder
+                .path()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            std::fs::write(folder.path().join("a.txt"), b"hello").unwrap();
+            let downloads = Arc::new(AtomicUsize::new(0));
+            let observed = downloads.clone();
+            let mut created = false;
+            let (address, worker) = server(11, move |_, request| {
+                if request.line.starts_with("GET /.well-known/jmap ") {
+                    return response("200 OK", "", &session(modern).to_string());
+                }
+                if request.line.starts_with("POST /upload/") {
+                    return response(
+                        "200 OK",
+                        "",
+                        &json!({"accountId":"account","blobId":"temporary-upload","size":5})
+                            .to_string(),
+                    );
+                }
+                if request.line.starts_with("GET /download/") {
+                    observed.fetch_add(1, Ordering::Relaxed);
+                    return response("200 OK", "", "hello");
+                }
+                let request: Value = serde_json::from_slice(&request.body).unwrap();
+                let call = &request["methodCalls"][0];
+                let method = call[0].as_str().unwrap();
+                let args = &call[1];
+                let state = if created { "2" } else { "1" };
+                let result = match method {
+                    "FileNode/query" => json!({"queryState":"q1","ids":["root"]}),
+                    "FileNode/get" => {
+                        let mut list = Vec::new();
+                        for id in args["ids"].as_array().unwrap() {
+                            let mut node = if id == "root" {
+                                json!({"id":"root","name":root_name,"parentId":null})
+                            } else {
+                                assert!(created);
+                                json!({"id":"file","name":"a.txt","parentId":"root","blobId":"linked-file-content","size":5})
+                            };
+                            node[if modern { "@type" } else { "nodeType" }] =
+                                json!(match (modern, id == "root") {
+                                    (true, true) => "Directory",
+                                    (true, false) => "File",
+                                    (false, true) => "directory",
+                                    (false, false) => "file",
+                                });
+                            list.push(node);
+                        }
+                        json!({"state":state,"list":list,"notFound":[]})
+                    }
+                    "FileNode/set" => {
+                        assert_eq!(args["create"]["drive"]["blobId"], "temporary-upload");
+                        created = true;
+                        json!({"oldState":"1","newState":"2","created":{"drive":{"id":"file"}}})
+                    }
+                    "FileNode/changes" => {
+                        json!({"oldState":args["sinceState"],"newState":"2","hasMoreChanges":false,"created":["file"],"updated":[],"destroyed":[]})
+                    }
+                    _ => panic!("Unexpected method {method}"),
+                };
+                response(
+                    "200 OK",
+                    "",
+                    &json!({"methodResponses":[[method,result,"drive"]]}).to_string(),
+                )
+            });
+            let config = Config {
+                server: address,
+                username: "test@example.org".into(),
+                local_folder: folder.path().into(),
+                file_settle_seconds: 0,
+                ..Config::default()
+            };
+            let cancel = Arc::new(AtomicBool::new(false));
+            let mut remote =
+                Jmap::connect_inner(&config, "secret".into(), cancel.clone(), true).unwrap();
+            let mut store = Store::open(&config).unwrap();
+            // The public engine validates HTTPS. This isolated HTTP transport uses the
+            // same profile identity but no production account or external endpoint.
+            let mut engine_config = config.clone();
+            engine_config.server = "https://jmap.example.com".into();
+            let first = engine::sync(
+                &engine_config,
+                &mut store,
+                &mut remote,
+                &cancel,
+                &mut |_| {},
+            )
+            .unwrap();
+            assert_eq!(first.uploaded, 1);
+            let second = engine::sync(
+                &engine_config,
+                &mut store,
+                &mut remote,
+                &cancel,
+                &mut |_| {},
+            )
+            .unwrap();
+            worker.join().unwrap();
+            assert_eq!(
+                second.downloaded, 0,
+                "an acknowledged upload must not become a download"
+            );
+            assert_eq!(downloads.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                store.baselines().unwrap()["a.txt"].remote_blob.as_deref(),
+                Some("linked-file-content")
+            );
+        }
+    }
+
+    #[test]
     fn http_round_trip_supports_both_schemas_conditional_writes_and_resumed_download() {
         for (modern, bearer) in [(false, false), (true, false), (false, true), (true, true)] {
-            let (address, worker) = server(12, move |index, request| {
+            let (address, worker) = server(14, move |index, request| {
                 assert!(request.headers.contains(if bearer {
                     "authorization: bearer test-token"
                 } else {
@@ -879,11 +1329,11 @@ mod tests {
                         &json!({"accountId":"account","blobId":"uploaded","size":5}).to_string(),
                     );
                 }
-                if index == 8 {
+                if index == 10 {
                     assert!(request.headers.contains("range: bytes=2-"));
                     assert!(request
                         .line
-                        .starts_with("GET /download/account/uploaded/renamed.txt?"));
+                        .starts_with("GET /download/account/linked-updated/renamed.txt?"));
                     return response(
                         "206 Partial Content",
                         "Content-Range: bytes 2-4/5\r\n",
@@ -930,24 +1380,31 @@ mod tests {
                         assert_eq!(node["blobId"], "uploaded");
                         json!({"oldState":"1","newState":"2","created":{"drive":{"id":"new"}}})
                     }
-                    7 => {
+                    8 => {
                         assert_eq!(method, "FileNode/set");
                         assert_eq!(args["ifInState"], "2");
                         assert_eq!(args["update"]["new"]["name"], "renamed.txt");
+                        assert_eq!(args["update"]["new"]["blobId"], "uploaded");
                         json!({"oldState":"2","newState":"3","updated":{"new":null}})
                     }
-                    9 => {
+                    11 => {
                         assert_eq!(method, "FileNode/changes");
                         assert_eq!(args["sinceState"], "1");
                         json!({"oldState":"1","newState":"3","hasMoreChanges":false,"created":["new"],"updated":[],"destroyed":["file"]})
                     }
-                    10 => {
+                    7 | 9 | 12 => {
+                        assert_eq!(method, "FileNode/get");
+                        assert_eq!(args["ids"], json!(["new"]));
                         file["id"] = json!("new");
-                        file["name"] = json!("renamed.txt");
-                        file["blobId"] = json!("uploaded");
-                        json!({"state":"3","list":[file],"notFound":[]})
+                        file["name"] = json!(if index == 7 { "new.txt" } else { "renamed.txt" });
+                        file["blobId"] = json!(if index == 7 {
+                            "linked-created"
+                        } else {
+                            "linked-updated"
+                        });
+                        json!({"state":if index == 7 { "2" } else { "3" },"list":[file],"notFound":[]})
                     }
-                    11 => json!({"state":"3","list":[],"notFound":[]}),
+                    13 => json!({"state":"3","list":[],"notFound":[]}),
                     _ => unreachable!(),
                 };
                 response(
@@ -989,9 +1446,17 @@ mod tests {
                     &mut state,
                 )
                 .unwrap();
+            assert_eq!(node.blob_id.as_deref(), Some("linked-created"));
             let node = remote
-                .update(&node, "renamed.txt", Some("root"), None, &mut state)
+                .update(
+                    &node,
+                    "renamed.txt",
+                    Some("root"),
+                    Some((&blob, 5)),
+                    &mut state,
+                )
                 .unwrap();
+            assert_eq!(node.blob_id.as_deref(), Some("linked-updated"));
             assert_eq!(state, "3");
             let staged = folder.path().join("resumed.part");
             std::fs::write(&staged, b"he").unwrap();

@@ -11,6 +11,21 @@
 #include <QFile>
 #include <QIcon>
 #include <QJsonDocument>
+#include <QQuickImageProvider>
+#include <QFileIconProvider>
+#include <QStyle>
+
+class FileIconProvider : public QQuickImageProvider {
+public:
+    FileIconProvider() : QQuickImageProvider(QQuickImageProvider::Pixmap) {}
+    QPixmap requestPixmap(const QString &id, QSize *size, const QSize &requested) override {
+        QFileIconProvider provider;
+        auto icon = provider.icon(QFileInfo(QUrl::fromPercentEncoding(id.toUtf8())));
+        if (icon.isNull()) icon = QApplication::style()->standardIcon(QStyle::SP_FileIcon);
+        auto image = icon.pixmap(requested.isValid() ? requested : QSize(40, 40));
+        if (size) *size = image.size(); return image;
+    }
+};
 
 int main(int argc, char **argv) {
     QApplication application(argc, argv);
@@ -33,6 +48,7 @@ int main(int argc, char **argv) {
     if (core.isEmpty()) core = QDir(application.applicationDirPath()).filePath("filenode-core");
     Backend backend(core, parser.value("config"), parser.isSet("no-tray"), parser.isSet("background"));
     QQmlApplicationEngine engine;
+    engine.addImageProvider("fileicon", new FileIconProvider());
     engine.rootContext()->setContextProperty("App", &backend);
     engine.rootContext()->setContextProperty("startSettings", parser.isSet("settings"));
     engine.load(QUrl("qrc:/Main.qml"));
@@ -42,20 +58,27 @@ int main(int argc, char **argv) {
     backend.powerMonitor()->watchWindow(window);
     if (parser.isSet("self-test")) {
         const auto directory = parser.value("self-test"); QDir().mkpath(directory);
-        QTimer::singleShot(1500, &application, [&, directory] { window->grabWindow().save(QDir(directory).filePath("qt-status.png")); backend.injectPower(true, false); });
+        QTimer::singleShot(1500, &application, [&] {
+            backend.activities()->upsert({{"folder","/home/user/Desktop"},{"path","Project notes.md"},{"operation","upload"},{"state","transferring"},{"completed",512},{"total",1024}});
+            backend.injectPower(true, false);
+        });
+        QTimer::singleShot(1800, &application, [&, directory] { window->grabWindow().save(QDir(directory).filePath("qt-status.png")); });
         QTimer::singleShot(2200, &application, [&] {
+            backend.activities()->upsert({{"folder","/home/user/Desktop"},{"path","Project notes.md"},{"operation","upload"},{"state","synced"},{"completed",1024},{"total",1024}});
+            backend.activities()->upsert({{"folder","/home/user/Documents"},{"path","Report.pdf"},{"operation","download"},{"state","retrying"},{"completed",1024},{"total",4096}});
             if (parser.isSet("self-test-account")) QMetaObject::invokeMethod(window, "showAccountForTest");
             else emit backend.showSettings();
         });
         QTimer::singleShot(3200, &application, [&, directory] {
-            bool ready = backend.ready() && backend.status() == backend.translate("status.power_paused");
+            bool ready = backend.ready() && backend.error().isEmpty() && backend.status() == backend.translate("status.power_paused") && backend.activities()->count() == 2;
             if (parser.isSet("self-test-account")) {
                 auto *selector = window->findChild<QObject *>("authModeSelector");
                 const int expected = backend.config().value("auth_mode").toString() == "browser" ? 1 : 0;
                 ready = ready && selector && selector->property("currentIndex").toInt() == expected;
             }
             for (auto *candidate : application.allWindows()) if (candidate != window && candidate->isVisible()) if (auto *quick = qobject_cast<QQuickWindow *>(candidate)) quick->grabWindow().save(QDir(directory).filePath("qt-settings.png"));
-            QFile result(QDir(directory).filePath("qt-smoke.json")); result.open(QIODevice::WriteOnly); result.write(QJsonDocument(QJsonObject{{"ready",ready},{"style",backend.style()},{"qt",qVersion()}}).toJson());
+            const auto folders = backend.config().value("sync_folders").toList().size();
+            QFile result(QDir(directory).filePath("qt-smoke.json")); result.open(QIODevice::WriteOnly); result.write(QJsonDocument(QJsonObject{{"ready",ready},{"folders",folders},{"style",backend.style()},{"qt",qVersion()}}).toJson());
             backend.quit(); if (!ready) application.exit(2);
         });
     }

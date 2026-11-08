@@ -1,6 +1,6 @@
 [package]
 name = "filenode"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.98"
 description = "Cross-platform desktop synchronization for Stalwart JMAP Files"
@@ -19,6 +19,7 @@ clap = { version = "4", features = ["derive"] }
 directories = "6"
 fs2 = "0.4"
 getrandom = "0.4"
+globset = "0.4"
 hex = "0.4"
 notify = "8.2"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
@@ -29,6 +30,7 @@ sha2 = "0.10"
 sys-locale = "0.3"
 tempfile = "3"
 toml = "0.8"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
 unicode-normalization = "0.1"
 url = "2"
 uuid = { version = "1", features = ["v4"] }

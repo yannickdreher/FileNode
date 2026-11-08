@@ -2,7 +2,7 @@
 
 English · [Deutsch](README.de.md) · [Website](https://yannickdreher.github.io/FileNode/) · [Downloads](https://github.com/yannickdreher/FileNode/releases)
 
-A JMAP Files synchronization client for Windows and Linux. The shared synchronization engine is Rust. Windows has a dedicated **WinUI 3/C#** frontend; Linux has a separate **Qt 6/C++/QML** frontend. UI text is English and German; code and technical diagnostics are English. Version 0.1 remains a preview.
+A JMAP Files synchronization client for Windows and Linux. The shared synchronization engine is Rust. Windows has a dedicated **WinUI 3/C#** frontend; Linux has a separate **Qt 6/C++/QML** frontend. UI text is English and German; code and technical diagnostics are English. The 0.x versions are previews.
 
 ## Desktop behavior
 
@@ -12,10 +12,16 @@ Both frontends share `locales/en.json` and `locales/de.json`, the configuration 
 
 ## Features
 
+- Verified account sign-in is separate from each folder's sync status. Each file has one activity row with streamed byte progress and completion/retry states.
+- Multiple local folders per account, with automatic server folders named after each selection and independent retry/state for each folder.
 - Bidirectional full-file synchronization, SHA-256 comparison, SQLite three-way baselines and a durable operation journal.
 - Both copies survive conflicts; stable remote IDs support remote renames, and unambiguous local file renames preserve server identity.
-- Deletions are opt-in, with mass-deletion limits. Old local versions go to `.filenode/history`; remote versions go to `.filenode-trash`. Remote `FileNode/destroy` is never called.
+- Bidirectional deletions use the server trash, interoperating with Bulwark and retaining mass-deletion limits. Remote `FileNode/destroy` is never called. [Trash behavior](docs/deletions.md).
 - Native file events (`notify`: inotify on Linux, ReadDirectoryChangesW on Windows), debouncing, event-invalidated content hashes, periodic full verification and JMAP `FileNode/changes`.
+- Editable exclusions for temporary files, Office lock files and partial downloads, applied symmetrically without deleting existing copies. [Rules](docs/exclusions.md).
+- Server-discovered upload limits, an optional user size cap and 1–16 parallel blob uploads bounded by the server; FileNode commits remain serial. Oversized files show individual warnings while other files continue. [Transfer behavior](docs/transfers.md).
+- Optional same-origin JMAP WebSocket push with polling fallback and a remote check after reconnect. Downloads resume; interrupted uploads restart the complete file.
+- Native Windows Application Event Log and Linux journal/syslog diagnostics, plus selectable per-folder error details. [Diagnostics](docs/diagnostics.md).
 - Separate upload/download payload caps in KiB/s, editable while running. Zero disables the cap.
 - Busy files are deferred; changed files must settle across observations before upload. Unrelated top-level file groups can still sync.
 - Desktop power notifications pause work during energy saver/standby; the energy saver preference can be disabled. Resume causes fresh verification. The application never inhibits sleep.
@@ -45,9 +51,9 @@ Pull requests run Linux and native Windows checks on GitHub Actions. Merges into
 
 ## Connect
 
-In settings, configure the JMAP server and username. Defaults are `https://jmap.example.com` for JMAP and `https://mail.example.com` for the web client. Choose **Browser / single sign-on** for OAuth Authorization Code + PKCE or **App password**, then select **Sign in**. Select a dedicated local folder; leave deletion propagation disabled initially. Use a separate folder for each account/profile. See [browser authentication](docs/browser-authentication.md) for server prerequisites and external OIDC providers.
+In **Sync and backup**, add the local folders to synchronize. In **Account**, configure the JMAP server and username. Defaults are `https://jmap.example.com` for JMAP and `https://mail.example.com` for the web client. Choose **Browser / single sign-on** for OAuth Authorization Code + PKCE or **App password**, then select **Sign in**. Check the deletion propagation setting before connecting a test folder. See [browser authentication](docs/browser-authentication.md) for server prerequisites and external OIDC providers.
 
-On the Account page, **Sign in** saves the entered settings before authentication. The remote target is automatic: selecting `C:\Users\yannick\Desktop` synchronizes into the top-level remote folder `Desktop`. There is no remote-folder field or account-root selection. Existing local state remains bound to its original remote folder ID; if an older profile used a different name, choose a fresh local folder rather than deleting its state.
+**Sign in** saves the entered settings before authentication. Server folders use the selected folder's final name: `C:\Users\Yannick\Desktop` maps to `/Desktop`, and `C:\Users\Yannick\Documents\Büro` maps to `/Büro`. Overlapping local or remote selections are rejected. Folders and sync preferences can be changed while syncing; saved changes safely restart the worker when needed and continue automatically. Adding a folder starts synchronization after saving if the account is already signed in. **Stop sync** keeps both local and remote files. See [folder selection](docs/folder-selection.md).
 
 
 A configured account resumes synchronization when FileNode starts. There is no separate startup-resume setting. Browser authentication reuses saved tokens; an interactive browser login still requires the user's sign-in action.
@@ -59,16 +65,16 @@ filenode --headless --config /absolute/profile.toml --dry-run
 filenode --headless --config /absolute/profile.toml --once --language en
 ```
 
-Headless mode requires an existing absolute local folder and saved credentials. Browser-mode profiles reuse/refresh the desktop session without opening a browser. App-password profiles use the OS keyring or `FILENODE_PASSWORD` supplied by a secret manager. Never put passwords in command-line arguments or TOML. `--dry-run` can create private local metadata but changes no user files or remote objects. `--once` waits for settling and returns an error if files remain busy/changing beyond twice the settling interval plus 30 seconds; desktop mode continues retrying. Headless mode does not subscribe to desktop power notifications.
+Headless mode requires absolute selected folders and saved credentials. Browser-mode profiles reuse/refresh the desktop session without opening a browser. App-password profiles use the OS keyring or `FILENODE_PASSWORD` supplied by a secret manager. Never put passwords in command-line arguments or TOML. `--dry-run` returns one plan per selection; it can create private local metadata but changes no user files or remote objects. `--once` fails if any selected folder fails. `--once` waits for settling and returns an error if files remain busy/changing beyond twice the settling interval plus 30 seconds; desktop mode continues retrying. Headless mode does not subscribe to desktop power notifications. Size-limited files also make `--once` fail; other eligible files can still complete.
 
 ## Limits and recovery
 
-This is a full-file preview, not a complete OneDrive replacement. Files on demand, Explorer placeholders, block transfers, remote push, selective sync, multiple-account UI, conflict/restore UI, signed releases and automatic updates remain open. Transfers are serial. Defaults include a 1 GiB file limit, 100,000 entries, 200 UTF-8 bytes per filename and 240 per relative path. Symlinks/reparse points, unsafe names and case/normalization collisions stop scanning. Permissions, ownership, ACLs, alternate streams and timestamps are not synchronized. Case-only renames are not reliably supported.
+This is a full-file preview, not a complete OneDrive replacement. Files on demand, Explorer placeholders, block transfers, arbitrary-offset upload resumption, selective sync, multiple-account UI, conflict/restore UI, signed releases and automatic updates remain open. Blob uploads can run in parallel; downloads and FileNode commits remain serial. Automatic upload limits use server discovery, with a 1 GiB fallback only when unavailable. Other limits include 100,000 entries, 200 UTF-8 bytes per filename and 240 per relative path. Symlinks/reparse points, unsafe names and case/normalization collisions stop scanning. Permissions, ownership, ACLs, alternate streams and timestamps are not synchronized. Case-only renames are not reliably supported.
 
 The complete namespace is still enumerated; cached hashes reduce content reads, not directory-walk complexity. Watcher loss, manual checks, reconnects and periodic verification rehash contents. Settling and locks reduce races but cannot prove that every application has finished writing. Unix locks are advisory. Payload caps exclude TLS/HTTP overhead and socket buffering. [Architecture](docs/architecture.md) describes these boundaries and acceptance work.
 
-Never remove `.filenode` to repair a profile: it holds the baseline, journal, transfers and recovery history. Pause sync before restoring copies. Local recovery lives under `.filenode/history`; remote recovery under `.filenode-trash` can be accessed through a JMAP client such as Bulwark. Recovery has no automatic retention policy and consumes space/quota. Maintain independent backups.
+Never remove `.filenode` to repair a profile: it holds the baseline, journal, transfers and recovery history. Pause sync before restoring copies. The Recycle bin uses the server trash. Separate internal overwrite protection uses `.filenode/history` locally and `.filenode-history` remotely; it has no automatic retention policy and consumes space/quota. Maintain independent backups.
 
 Adapters cover Stalwart 0.16 `nodeType`/`type` and the newer `@type`/`mediaType` FileNode schema. Loopback tests verify both; live Stalwart compatibility, interrupted-power behavior and large multi-device workloads still need acceptance testing.
 
-Protocol references: [JMAP core](https://www.rfc-editor.org/rfc/rfc8620), [FileNode draft](https://datatracker.ietf.org/doc/html/draft-ietf-jmap-filenode-18), [Stalwart file storage](https://stalw.art/docs/collaboration/file-storage/).
+Protocol references: [JMAP core](https://www.rfc-editor.org/rfc/rfc8620), [FileNode draft](https://datatracker.ietf.org/doc/html/draft-ietf-jmap-filenode-20), [Stalwart file storage](https://stalw.art/docs/collaboration/file-storage/).

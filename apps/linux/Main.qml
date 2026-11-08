@@ -18,7 +18,9 @@ ApplicationWindow {
     function showAccountForTest() { settings.showSettings(); pages.currentIndex = 1 }
     onClosing: function(close) { if (App.trayAvailable) { close.accepted = false; hide() } else { App.quit() } }
     header: ToolBar {
+        implicitHeight: headerContent.implicitHeight + 24
         ColumnLayout {
+            id: headerContent
             anchors.fill: parent; anchors.margins: 12
             RowLayout {
                 Image { source: "qrc:/filenode.svg"; sourceSize.width: 26; sourceSize.height: 26 }
@@ -26,24 +28,28 @@ ApplicationWindow {
                 ToolButton { text: "☰"; Accessible.name: statusWindow.t("tray.menu"); onClicked: statusMenu.open() }
                 ToolButton { text: "×"; Accessible.name: statusWindow.t("tray.hide"); onClicked: App.trayAvailable ? statusWindow.hide() : App.quit() }
             }
-            Label { text: App.config.username || statusWindow.t("account.not_connected"); elide: Text.ElideRight; Layout.fillWidth: true }
-            Label { text: App.status; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Label { text: App.authenticated ? App.config.username : statusWindow.t("account.not_connected"); elide: Text.ElideRight; Layout.fillWidth: true }
+            Label { text: App.accountStatus; wrapMode: Text.Wrap; Layout.fillWidth: true }
+            Repeater {
+                model: App.config.sync_folders || []
+                Label { text: { let states = App.folderStatuses; let running = App.running; let account = App.accountState; let power = App.powerPaused; return modelData.local_folder.split("/").pop() + " · " + App.folderStatus(modelData.local_folder) } font.pointSize: 9; elide: Text.ElideRight; Layout.fillWidth: true }
+            }
         }
     }
     Menu {
         id: statusMenu
         x: statusWindow.width - width - 12; y: 45
         MenuItem { text: statusWindow.t("tray.settings"); onTriggered: settings.showSettings() }
-        MenuItem { text: statusWindow.t(App.running ? "action.pause" : "action.resume"); onTriggered: App.running ? App.pause() : App.start() }
+        MenuItem { text: statusWindow.t(App.running ? "action.pause" : "action.start"); onTriggered: App.running ? App.pause() : App.start() }
         MenuItem { text: statusWindow.t("action.check"); enabled: App.running; onTriggered: App.check() }
         MenuSeparator {}
         MenuItem { text: statusWindow.t("tray.quit"); onTriggered: App.quit() }
     }
     ColumnLayout {
         anchors.fill: parent; anchors.margins: 16; spacing: 12
-        Label { visible: !App.running && App.activities.length === 0; text: statusWindow.t("status.welcome"); font.pointSize: 20; wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Label { visible: !App.running && App.activities.length === 0; text: statusWindow.t("status.setup_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
-        Button { visible: !App.running && App.activities.length === 0; text: statusWindow.t("tray.settings"); onClicked: settings.showSettings() }
+        Label { visible: !App.running && App.activities.count === 0; text: statusWindow.t("status.welcome"); font.pointSize: 20; wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Label { visible: !App.running && App.activities.count === 0; text: statusWindow.t("status.setup_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+        Button { visible: !App.running && App.activities.count === 0; text: statusWindow.t("tray.settings"); onClicked: settings.showSettings() }
         Label { visible: App.error.length > 0; text: statusWindow.t("error.summary"); wrapMode: Text.Wrap; Layout.fillWidth: true }
         Label { text: statusWindow.t("activity.recent"); font.bold: true }
         ListView {
@@ -51,22 +57,39 @@ ApplicationWindow {
             model: App.activities
             ScrollBar.vertical: ScrollBar {}
             delegate: ItemDelegate {
+                required property var activity
                 width: ListView.view.width
-                contentItem: ColumnLayout {
-                    Label { text: modelData.name; font.bold: true; Layout.fillWidth: true; elide: Text.ElideMiddle }
-                    Label { text: { let language = App.language; return App.formatMessage(modelData.message) } wrapMode: Text.Wrap; Layout.fillWidth: true }
-                    Label { text: new Date(modelData.time).toLocaleString(Qt.locale(App.language)); opacity: 0.65; font.pointSize: 9 }
+                contentItem: RowLayout {
+                    Image { source: "image://fileicon/" + encodeURIComponent(activity.folder + "/" + activity.path); sourceSize.width: 40; sourceSize.height: 40; Layout.preferredWidth: 40; Layout.preferredHeight: 40; fillMode: Image.PreserveAspectFit }
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Label { text: activity.path.split("/").pop(); font.bold: true; Layout.fillWidth: true; elide: Text.ElideMiddle }
+                        Label {
+                            text: {
+                                let active = activity.state === "transferring"
+                                let state = active ? activity.operation === "upload" ? "uploading" : activity.operation === "download" ? "downloading" : "working" : activity.state === "synced" && activity.operation === "trash" ? "trashed" : activity.state
+                                let percent = activity.total > 0 ? Math.min(100, Math.floor(activity.completed * 100 / activity.total)) : 0
+                                if (state === "too_large") return statusWindow.t("activity.too_large").replace("{size}", App.formatBytes(activity.total)).replace("{limit}", App.formatBytes(activity.limit))
+                                return statusWindow.t("activity." + state) + (active && activity.total > 0 ? " · " + percent + "%" : "")
+                            }
+                            wrapMode: Text.Wrap; Layout.fillWidth: true
+                        }
+                        ProgressBar { visible: activity.state === "transferring"; indeterminate: activity.total === 0; from: 0; to: Math.max(1, activity.total); value: activity.completed; Layout.fillWidth: true }
+                        Label { text: activity.folder.split("/").pop() + " · " + new Date(activity.time).toLocaleTimeString(Qt.locale(App.language), "hh:mm"); opacity: 0.65; font.pointSize: 9 }
+                    }
                 }
             }
-            Label { visible: App.activities.length === 0; text: statusWindow.t("activity.empty"); width: parent.width; wrapMode: Text.Wrap }
+            Label { visible: App.activities.count === 0; text: statusWindow.t("activity.empty"); width: parent.width; wrapMode: Text.Wrap }
         }
     }
     footer: ToolBar {
+        implicitHeight: footerContent.implicitHeight + 16
         RowLayout {
+            id: footerContent
             anchors.fill: parent; anchors.margins: 8
             ToolButton { text: statusWindow.t("action.open"); Layout.fillWidth: true; onClicked: App.openFolder() }
             ToolButton { text: statusWindow.t("action.online"); Layout.fillWidth: true; onClicked: App.openOnline() }
-            ToolButton { text: statusWindow.t("action.recovery"); Layout.fillWidth: true; onClicked: App.openRecovery() }
+            ToolButton { text: statusWindow.t("action.trash"); Layout.fillWidth: true; onClicked: App.openTrash() }
         }
     }
 
@@ -80,12 +103,17 @@ ApplicationWindow {
         function showSettings() { show(); raise(); requestActivate(); if (App.trayAvailable) statusWindow.hide() }
         function save(connectAccount) {
             let browser = authMode.currentIndex === 1
-            App.apply({ server: server.text, web_url: web.text, username: username.text,
-                local_folder: localFolder.text,
-                propagate_deletes: deletes.checked, interval_seconds: interval.value,
-                full_scan_seconds: verification.value,
-                auth_mode: browser ? "browser" : "app_password", oauth_issuer:issuer.text,
-                oauth_client_id:clientId.text, oauth_scopes:scopes.text, oauth_redirect_port:port.value }, connectAccount, browser ? "" : password.text, browser && connectAccount)
+            if (connectAccount) {
+                App.apply({ server: server.text, web_url: web.text, username: username.text,
+                    auth_mode: browser ? "browser" : "app_password", oauth_issuer:issuer.text,
+                    oauth_client_id:clientId.text, oauth_scopes:scopes.text, oauth_redirect_port:port.value },
+                    true, browser ? "" : password.text, browser)
+            } else {
+                App.apply({ propagate_deletes: deletes.checked, interval_seconds: interval.value,
+                    exclude_patterns: exclusions.text.split(/\r?\n/).map(line => line.trim()).filter(line => line.length > 0),
+                    max_file_bytes: maxFile.value * 1048576, parallel_uploads: parallelUploads.value,
+                    full_scan_seconds: verification.value })
+            }
             password.text = ""
         }
         RowLayout {
@@ -113,14 +141,47 @@ ApplicationWindow {
                         ColumnLayout {
                             spacing: 16
                             Label { text: statusWindow.t("settings.sync_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            GroupBox {
-                                title: statusWindow.t("settings.local"); Layout.fillWidth: true
-                                RowLayout { anchors.fill: parent
-                                    TextField { id: localFolder; text: App.config.local_folder || ""; enabled: !App.running; Layout.fillWidth: true }
-                                    Button { text: "…"; enabled: !App.running; onClicked: folderDialog.open() }
+                            Label { text: statusWindow.t("settings.folders"); font.pointSize: 16 }
+                            Label { text: statusWindow.t("settings.folders_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Label { visible: (App.config.sync_folders || []).length === 0; text: statusWindow.t("settings.no_folders"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Repeater {
+                                model: App.config.sync_folders || []
+                                GroupBox {
+                                    required property var modelData
+                                    required property int index
+                                    Layout.fillWidth: true
+                                    ColumnLayout {
+                                        anchors.fill: parent
+                                        Label { text: modelData.local_folder; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        Label { text: statusWindow.t("settings.folder_target") + ": /" + modelData.remote_path; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        Label { text: { let states = App.folderStatuses; let running = App.running; let account = App.accountState; let power = App.powerPaused; return App.folderStatus(modelData.local_folder) } wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        Label { visible: folderError.text.length > 0; text: statusWindow.t("error.details"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        TextArea {
+                                            id: folderError
+                                            text: (App.folderStatuses[modelData.local_folder] || {}).details || ""
+                                            visible: text.length > 0; readOnly: true; selectByMouse: true
+                                            textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap
+                                            Layout.fillWidth: true; Layout.preferredWidth: 1
+                                        }
+                                        Flow {
+                                            Layout.fillWidth: true; spacing: 8
+                                            Button { text: statusWindow.t("action.open"); onClicked: App.openPath(modelData.local_folder) }
+                                            Button { text: statusWindow.t("settings.remove_folder"); enabled: App.ready && App.accountState !== "checking"; onClicked: { let next = App.config.sync_folders.slice(); next.splice(index, 1); App.apply({sync_folders: next}) } }
+                                        }
+                                    }
                                 }
                             }
-                            Switch { id: deletes; text: statusWindow.t("settings.deletes"); checked: App.config.propagate_deletes || false; enabled: !App.running; Layout.fillWidth: true }
+                            Button { text: statusWindow.t("settings.add_folder"); enabled: App.ready && App.accountState !== "checking"; onClicked: folderDialog.open() }
+                            Label { text: statusWindow.t("settings.stop_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            Switch { id: deletes; text: statusWindow.t("settings.deletes"); checked: App.config.propagate_deletes || false; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
+                            GroupBox { title: statusWindow.t("settings.exclusions"); Layout.fillWidth: true
+                                ColumnLayout { anchors.fill: parent
+                                    Label { text: statusWindow.t("settings.exclusions_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                    ScrollView { Layout.fillWidth: true; Layout.preferredHeight: 180
+                                        TextArea { id: exclusions; text: (App.config.exclude_patterns || []).join("\n"); enabled: App.ready && App.accountState !== "checking"; selectByMouse: true; textFormat: TextEdit.PlainText; wrapMode: TextEdit.NoWrap }
+                                    }
+                                }
+                            }
                             GroupBox { title: statusWindow.t("settings.bandwidth"); Layout.fillWidth: true
                                 ColumnLayout { anchors.fill: parent
                                     RowLayout {
@@ -135,43 +196,49 @@ ApplicationWindow {
                                     }
                                 }
                             }
+                            Label { text: statusWindow.t("settings.max_file_size"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            SpinBox { id: maxFile; from: 0; to: 16777216; value: Math.ceil((App.config.max_file_bytes || 0) / 1048576); enabled: App.ready && App.accountState !== "checking"; editable: true }
+                            Label { text: statusWindow.t("settings.parallel_uploads"); wrapMode: Text.Wrap; Layout.fillWidth: true }
+                            SpinBox { id: parallelUploads; from: 1; to: 16; value: App.config.parallel_uploads || 2; enabled: App.ready && App.accountState !== "checking"; editable: true }
+                            Label { text: App.limitsSummary; wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Switch { text: statusWindow.t("settings.pause_power"); checked: App.config.pause_on_power_saver !== false; Layout.fillWidth: true; onClicked: App.apply({pause_on_power_saver: checked}) }
                             Label { visible: !App.powerAvailable; text: statusWindow.t("settings.power_unavailable"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             GroupBox { title: statusWindow.t("settings.advanced"); Layout.fillWidth: true
                                 GridLayout { anchors.fill: parent; columns: 3
                                     Label { text: statusWindow.t("settings.interval") }
-                                    SpinBox { id: interval; from: 5; to: 86400; value: App.config.interval_seconds || 30; enabled: !App.running; editable: true }
+                                    SpinBox { id: interval; from: 5; to: 86400; value: App.config.interval_seconds || 30; enabled: App.ready && App.accountState !== "checking"; editable: true }
                                     Label { text: statusWindow.t("settings.seconds") }
                                     Label { text: statusWindow.t("settings.full_scan") }
-                                    SpinBox { id: verification; from: 60; to: 86400; value: App.config.full_scan_seconds || 900; enabled: !App.running; editable: true }
+                                    SpinBox { id: verification; from: 60; to: 86400; value: App.config.full_scan_seconds || 900; enabled: App.ready && App.accountState !== "checking"; editable: true }
                                     Label { text: statusWindow.t("settings.seconds") }
                                 }
                             }
                         }
                         ColumnLayout {
                             spacing: 12
+                            Label { text: App.accountStatus; font.bold: true; Layout.fillWidth: true; wrapMode: Text.Wrap }
                             Label { text: statusWindow.t("settings.server") }
-                            TextField { id: server; text: App.config.server || ""; enabled: !App.running; Layout.fillWidth: true }
+                            TextField { id: server; text: App.config.server || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.web") }
-                            TextField { id: web; text: App.config.web_url || ""; enabled: !App.running; Layout.fillWidth: true }
+                            TextField { id: web; text: App.config.web_url || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.username") }
-                            TextField { id: username; text: App.config.username || ""; enabled: !App.running; Layout.fillWidth: true }
+                            TextField { id: username; text: App.config.username || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.authentication") }
-                            ComboBox { id: authMode; objectName: "authModeSelector"; model: [statusWindow.t("settings.auth_password"),statusWindow.t("settings.auth_browser")]; currentIndex: App.config.auth_mode === "browser" ? 1 : 0; enabled: !App.running; Layout.fillWidth: true }
+                            ComboBox { id: authMode; objectName: "authModeSelector"; model: [statusWindow.t("settings.auth_password"),statusWindow.t("settings.auth_browser")]; currentIndex: App.config.auth_mode === "browser" ? 1 : 0; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.password"); visible: authMode.currentIndex === 0 }
-                            TextField { id: password; visible: authMode.currentIndex === 0; echoMode: TextInput.Password; placeholderText: statusWindow.t("settings.password_hint"); enabled: !App.running; Layout.fillWidth: true }
+                            TextField { id: password; visible: authMode.currentIndex === 0; echoMode: TextInput.Password; placeholderText: statusWindow.t("settings.password_hint"); enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.credentials"); visible: authMode.currentIndex === 0; wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { text: statusWindow.t("settings.browser_hint"); visible: authMode.currentIndex === 1; wrapMode: Text.Wrap; Layout.fillWidth: true }
                             GroupBox { title: statusWindow.t("settings.oauth_advanced"); visible: authMode.currentIndex === 1; Layout.fillWidth: true
                                 ColumnLayout { anchors.fill: parent
                                     Label { text: statusWindow.t("settings.oauth_issuer") }
-                                    TextField { id: issuer; text: App.config.oauth_issuer || ""; enabled: !App.running; Layout.fillWidth: true }
+                                    TextField { id: issuer; text: App.config.oauth_issuer || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                                     Label { text: statusWindow.t("settings.oauth_client") }
-                                    TextField { id: clientId; text: App.config.oauth_client_id || ""; enabled: !App.running; Layout.fillWidth: true }
+                                    TextField { id: clientId; text: App.config.oauth_client_id || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                                     Label { text: statusWindow.t("settings.oauth_scopes") }
-                                    TextField { id: scopes; text: App.config.oauth_scopes || ""; enabled: !App.running; Layout.fillWidth: true }
+                                    TextField { id: scopes; text: App.config.oauth_scopes || ""; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                                     Label { text: statusWindow.t("settings.oauth_port") }
-                                    SpinBox { id: port; from: 0; to: 65535; value: App.config.oauth_redirect_port || 0; enabled: !App.running; editable: true }
+                                    SpinBox { id: port; from: 0; to: 65535; value: App.config.oauth_redirect_port || 0; enabled: App.ready && App.accountState !== "checking"; editable: true }
                                 }
                             }
                         }
@@ -191,19 +258,20 @@ ApplicationWindow {
                     }
                     RowLayout {
                         Button { text: statusWindow.t("settings.save"); visible: pages.currentIndex !== 1 && pages.currentIndex !== 3; enabled: App.ready; onClicked: settings.save(false) }
-                        Button { objectName: "accountSignInButton"; text: statusWindow.t(App.running ? "action.pause" : "action.signin"); visible: pages.currentIndex === 1; enabled: App.ready; highlighted: true; onClicked: App.running ? App.pause() : settings.save(true) }
+                        Button { objectName: "accountSignInButton"; text: statusWindow.t(App.accountState === "checking" ? "account.checking" : App.authenticated ? "account.signin_again" : "action.signin"); visible: pages.currentIndex === 1; enabled: App.ready && App.accountState !== "checking"; highlighted: true; onClicked: settings.save(true) }
                     }
                     Label { visible: App.running; text: statusWindow.t("settings.pause_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                     Label { visible: App.error.length > 0; text: statusWindow.t("error.details") + "\n" + App.error; wrapMode: Text.Wrap; Layout.fillWidth: true; font.family: "monospace" }
                 }
             }
         }
-        FolderDialog { id: folderDialog; onAccepted: localFolder.text = App.localPath(selectedFolder) }
+        FolderDialog { id: folderDialog; onAccepted: { let next = (App.config.sync_folders || []).slice(); next.push({local_folder:App.localPath(selectedFolder),remote_path:""}); App.apply({sync_folders:next}, App.authenticated) } }
     }
     Connections {
         target: App
         function onShowStatus() { statusWindow.showPanel() }
         function onShowSettings() { settings.showSettings() }
+        function onShowFolders() { settings.showSettings(); pages.currentIndex = 0 }
         function onHideStatus() { if (App.trayAvailable) statusWindow.hide() }
         function onConfigChanged() {
             // Translated model resets can otherwise overwrite the saved selection with index zero.

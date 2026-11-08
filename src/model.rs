@@ -25,6 +25,8 @@ pub struct Node {
     pub blob_id: Option<String>,
     pub kind: Kind,
     pub size: u64,
+    #[serde(default)]
+    pub role: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -54,7 +54,7 @@ impl Store {
             config.username,
             config.account_id.as_deref().unwrap_or(""),
             config.local_folder.canonicalize()?.display(),
-            config.remote_folder_name()?
+            config.remote_folder_path()?
         );
         if let Some(previous) = store.get_meta::<String>("identity")? {
             if previous != identity {

@@ -1,5 +1,15 @@
 const messages = {
   en: {
+    devEyebrow: "IN DEVELOPMENT · 0.2 PREVIEW",
+    devTitle: "More folders. Clearer control.",
+    devIntro: "The next preview adds multiple folders, a verified account state and one progress row per file. These features are in development builds; the download buttons above always point to the latest published release.",
+    devRulesTitle: "Your folders, your rules.",
+    devRulesText: "Choose which folders to sync, exclude files you don’t need and control upload speed. FileNode shows you when a file needs attention.",
+    devConnectTitle: "Ready for changing connections.",
+    devConnectText: "JMAP WebSocket notifications trigger remote checks when supported, with polling as a fallback. Downloads resume after interruptions; uploads restart the affected file from the beginning.",
+    devDetailsTitle: "Know what is happening.",
+    devDetailsText: "See separate sync states for every folder, actionable file-size warnings and selectable error details. Diagnose failures through Windows Event Log or Linux journal/syslog. Deletions use the shared server trash.",
+    devLink: "Follow the 0.2 preview ↗",
     skip: 'Skip to content', preview: 'Preview', nav: 'Main navigation', language: 'Language', howNav: 'How it works', storeSoon: 'Microsoft Store — coming soon', storeOpen: 'Open Microsoft Store', storeWeb: 'View in browser ↗', storeHint: 'The Store listing is being prepared. Portable downloads are available through GitHub Releases.',
     eyebrow: 'YOUR CLOUD, A LITTLE CLOSER', headline: 'Your files.<br>At home on<br><em>your desktop.</em>',
     intro: 'Bring your JMAP files to Windows and Linux. FileNode keeps a local copy in sync while you get on with your day.',
@@ -13,6 +23,16 @@ const messages = {
     faqTitle: 'A few things to know.', faq1Title: 'What server do I need?', faq1Text: 'A server that supports JMAP Files, such as a compatible Stalwart deployment. FileNode is a client for your server, not a hosted storage service. Browser sign-in depends on your server and identity provider configuration; app-password sign-in is also supported.', faq2Title: 'Are my files available offline?', faq2Text: 'Yes. Synced files are complete local files. FileNode currently uses full-file synchronization; it does not provide cloud-only placeholders or block-level delta transfers.', faq3Title: 'Does it work on GNOME?', faq3Text: 'The Linux frontend is Qt, including on GNOME. KDE styling is used when the integration is installed. GNOME may need an AppIndicator extension for the tray icon; without a tray, keep the status window open or minimized.', faq4Title: 'Is the Windows package signed?', faq4Text: 'The current MSIX is unsigned and uses a development identity. It needs signing or trust configuration for normal installation. The portable ZIP is a separate download. Microsoft Store publication is not available yet.', footer: 'A small place for your files to feel at home.', source: 'Source & documentation ↗', title: 'FileNode — Your files. At home on your desktop.'
   },
   de: {
+    devEyebrow: "IN ENTWICKLUNG · VORSCHAU 0.2",
+    devTitle: "Mehr Ordner. Klarer Überblick.",
+    devIntro: "Die nächste Vorschau ergänzt mehrere Ordner, eine bestätigte Anmeldung und eine Fortschrittszeile je Datei. Diese Funktionen gehören zum Entwicklungsstand; die Download-Buttons oben verweisen immer auf den zuletzt veröffentlichten Release.",
+    devRulesTitle: "Deine Ordner, deine Regeln.",
+    devRulesText: "Wähle deine Ordner aus, schließe unnötige Dateien aus und bestimme die Upload-Geschwindigkeit. FileNode zeigt dir, wenn eine Datei Aufmerksamkeit braucht.",
+    devConnectTitle: "Auch wenn das Netz wechselt.",
+    devConnectText: "JMAP-WebSocket-Benachrichtigungen stoßen bei Serverunterstützung einen Abgleich an, mit Polling als Fallback. Downloads werden nach Abbrüchen fortgesetzt; Uploads beginnen für die betroffene Datei von vorn.",
+    devDetailsTitle: "Wissen, was gerade passiert.",
+    devDetailsText: "Getrennte Zustände je Ordner, verständliche Dateigrößenwarnungen und auswählbare Fehlerdetails. Diagnosen im Windows-Ereignisprotokoll oder Linux-Journal/Syslog. Löschungen verwenden den gemeinsamen Server-Papierkorb.",
+    devLink: "Die Vorschau 0.2 verfolgen ↗",
     skip: 'Zum Inhalt', preview: 'Vorschau', nav: 'Hauptnavigation', language: 'Sprache', howNav: 'So funktioniert’s', storeSoon: 'Microsoft Store — demnächst', storeOpen: 'Microsoft Store öffnen', storeWeb: 'Im Browser ansehen ↗', storeHint: 'Der Store-Eintrag wird vorbereitet. Portable Downloads findest du unter GitHub Releases.',
     eyebrow: 'DEINE CLOUD, EIN STÜCK NÄHER', headline: 'Deine Dateien.<br>Zu Hause auf<br><em>deinem Desktop.</em>',
     intro: 'Deine JMAP-Dateien auf Windows und Linux. FileNode hält eine lokale Kopie synchron, während du dich um deinen Alltag kümmerst.',

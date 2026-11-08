@@ -71,6 +71,16 @@
       <div class="release-line"><span id="release-status" aria-live="polite" data-i18n="releaseFallback">Available builds and change notes are listed on GitHub Releases.</span><a href="https://github.com/yannickdreher/FileNode/releases" data-i18n="allReleases">All releases & checksums ↗</a></div>
     </section>
 
+    <section class="shell section-space development" aria-labelledby="development-title">
+      <div class="section-heading"><p class="eyebrow" data-i18n="devEyebrow">IN DEVELOPMENT · 0.2 PREVIEW</p><h2 id="development-title" data-i18n="devTitle">More folders. Clearer control.</h2><p data-i18n="devIntro">The next preview adds multiple folders, a verified account state and one progress row per file. These features are in development builds; the download buttons above always point to the latest published release.</p></div>
+      <div class="development-grid">
+        <article><h3 data-i18n="devRulesTitle">Your folders, your rules.</h3><p data-i18n="devRulesText">Choose which folders to sync, exclude files you don’t need and control upload speed. FileNode shows you when a file needs attention.</p></article>
+        <article><h3 data-i18n="devConnectTitle">Ready for changing connections.</h3><p data-i18n="devConnectText">JMAP WebSocket notifications trigger remote checks when supported, with polling as a fallback. Downloads resume after interruptions; uploads restart the affected file from the beginning.</p></article>
+        <article><h3 data-i18n="devDetailsTitle">Know what is happening.</h3><p data-i18n="devDetailsText">See separate sync states for every folder, actionable file-size warnings and selectable error details. Diagnose failures through Windows Event Log or Linux journal/syslog. Deletions use the shared server trash.</p></article>
+      </div>
+      <a class="text-link" href="https://github.com/yannickdreher/FileNode/pull/1" data-i18n="devLink">Follow the 0.2 preview ↗</a>
+    </section>
+
     <section class="shell faq section-space"><h2 data-i18n="faqTitle">A few things to know.</h2><div class="faq-list">
       <details><summary data-i18n="faq1Title">What server do I need?</summary><p data-i18n="faq1Text">A server that supports JMAP Files, such as a compatible Stalwart deployment. FileNode is a client for your server, not a hosted storage service. Browser sign-in depends on your server and identity provider configuration; app-password sign-in is also supported.</p></details>
       <details><summary data-i18n="faq2Title">Are my files available offline?</summary><p data-i18n="faq2Text">Yes. Synced files are complete local files. FileNode currently uses full-file synchronization; it does not provide cloud-only placeholders or block-level delta transfers.</p></details>

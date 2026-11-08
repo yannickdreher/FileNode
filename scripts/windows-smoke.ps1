@@ -21,4 +21,4 @@ $driveReport = Get-Content -Raw -LiteralPath $driveReportPath | ConvertFrom-Json
 if ($driveProcess.ExitCode -ne 0 -or !$driveReport.passed) {
     throw "Windows UI smoke test failed (exit $($driveProcess.ExitCode)): $($driveReport.message)"
 }
-Write-Output 'Windows UI smoke passed: startup, four settings pages, English/German, no account connection, clean quit.'
+Write-Output 'Windows UI smoke passed: English/German, verified account vs sync pause, independent folder states, one row per file with progress, multiple folders, stop without deletion, offline, clean quit.'

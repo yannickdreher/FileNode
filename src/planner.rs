@@ -1,12 +1,22 @@
 use crate::{config::Config, model::*};
 use anyhow::{bail, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 pub fn plan(
     local: &LocalTree,
     remote: &RemoteTree,
     base: &Baselines,
     config: &Config,
+) -> Result<Vec<Action>> {
+    plan_protected(local, remote, base, config, &HashSet::new())
+}
+
+pub fn plan_protected(
+    local: &LocalTree,
+    remote: &RemoteTree,
+    base: &Baselines,
+    config: &Config,
+    protected: &HashSet<String>,
 ) -> Result<Vec<Action>> {
     let paths: BTreeSet<_> = local
         .keys()
@@ -73,6 +83,15 @@ pub fn plan(
                 }
             }
         };
+        let action = if protected.contains(&path)
+            && !matches!(
+                action,
+                Action::CreateLocalDir(_) | Action::CreateRemoteDir(_) | Action::Accept(_)
+            ) {
+            Action::Blocked(path.clone())
+        } else {
+            action
+        };
         if matches!(action, Action::Blocked(_) | Action::Conflict(_)) {
             blocked_trees.push(path.clone());
         }
@@ -83,7 +102,23 @@ pub fn plan(
     if count > config.max_delete_count || count > fraction_limit {
         bail!("Deletion protection: {count} deletions planned. Limits: {} absolute, {} relative. Check the cause before proceeding; no files have been changed.", config.max_delete_count, fraction_limit);
     }
-    // Create parents first; remove children first. Accept/forget require no I/O.
+    // One remote directory move preserves the entire deleted tree in the trash.
+    // Keep the mass-deletion guard above based on the full affected entry count.
+    let deleted_directories: Vec<_> = actions
+        .iter()
+        .filter_map(|action| match action {
+            Action::DeleteRemote(path)
+                if remote
+                    .get(path)
+                    .is_some_and(|node| node.kind == Kind::Directory) =>
+            {
+                Some(path.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    actions.retain(|action| !matches!(action, Action::DeleteRemote(path) if deleted_directories.iter().any(|parent| path.starts_with(&format!("{parent}/")))));
+    // Create parents first; remove local children first. Accept/forget require no I/O.
     actions.sort_by_key(|a| {
         let depth = a.path().split('/').count();
         let group = match a {
@@ -138,6 +173,7 @@ mod tests {
             blob_id: Some(blob.into()),
             kind: Kind::File,
             size: 1,
+            role: None,
         }
     }
     fn base() -> Baselines {
@@ -198,10 +234,19 @@ mod tests {
         assert!(plan(&LocalTree::new(), &r, &b, &cfg()).is_err());
     }
     #[test]
-    fn deletion_requires_opt_in() {
+    fn deletion_propagation_can_be_disabled() {
         let l = [("a".into(), file("old"))].into();
         assert_eq!(
-            plan(&l, &RemoteTree::new(), &base(), &Config::default()).unwrap(),
+            plan(
+                &l,
+                &RemoteTree::new(),
+                &base(),
+                &Config {
+                    propagate_deletes: false,
+                    ..Config::default()
+                }
+            )
+            .unwrap(),
             vec![Action::Blocked("a".into())]
         );
     }
