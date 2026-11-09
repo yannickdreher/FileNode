@@ -29,7 +29,9 @@ internal sealed class CoreClient : IAsyncDisposable
     private readonly Dictionary<string, string> english;
     private readonly Dictionary<string, string> german;
     private Process? process;
-    private bool stopping;
+    private volatile bool stopping;
+    private Task? shutdown;
+    internal int? WorkerId => process?.Id;
     public JsonObject Config { get; private set; } = new();
     public JsonObject Limits { get; private set; } = new();
     public string LimitsSummary {
@@ -103,7 +105,7 @@ internal sealed class CoreClient : IAsyncDisposable
     private async Task DrainErrors(Process worker)
     {
         // Do not display raw child stderr: startup paths can contain personal information.
-        while (await worker.StandardError.ReadLineAsync() is not null) { }
+        while (await worker.StandardError.ReadLineAsync().ConfigureAwait(false) is not null) { }
     }
     private async Task ReadEvents(Process worker)
     {
@@ -112,7 +114,7 @@ internal sealed class CoreClient : IAsyncDisposable
             // Bound frames before allocation. Credentials never travel on this output channel.
             var buffer = new char[4096]; var frame = new StringBuilder();
             int count;
-            while ((count = await worker.StandardOutput.ReadAsync(buffer)) > 0)
+            while ((count = await worker.StandardOutput.ReadAsync(buffer).ConfigureAwait(false)) > 0)
                 for (int index = 0; index < count; index++)
                 {
                     if (buffer[index] != '\n')
@@ -124,7 +126,7 @@ internal sealed class CoreClient : IAsyncDisposable
                     var message = JsonNode.Parse(frame.ToString())!.AsObject(); frame.Clear();
                     dispatcher.TryEnqueue(() => Receive(message));
                 }
-            await worker.WaitForExitAsync();
+            await worker.WaitForExitAsync().ConfigureAwait(false);
             if (!stopping) dispatcher.TryEnqueue(() => { Running = false; Ready = false; Error = "Rust worker exited. Restart FileNode to reconnect."; Changed?.Invoke(false); });
         }
         catch (Exception error) { if (!stopping) dispatcher.TryEnqueue(() => { Error = error.Message; Running = false; Changed?.Invoke(false); }); }
@@ -202,11 +204,11 @@ internal sealed class CoreClient : IAsyncDisposable
     }
     public async Task Send(string command, JsonObject? data = null)
     {
-        if (process is null || process.HasExited) return;
+        if (stopping || process is null || process.HasExited) return;
         data ??= new(); data["command"] = command;
-        await writer.WaitAsync();
-        try { await process.StandardInput.WriteLineAsync(data.ToJsonString()); await process.StandardInput.FlushAsync(); }
-        catch (IOException error) { Error = error.Message; Changed?.Invoke(false); }
+        await writer.WaitAsync().ConfigureAwait(false);
+        try { await process.StandardInput.WriteLineAsync(data.ToJsonString()).ConfigureAwait(false); await process.StandardInput.FlushAsync().ConfigureAwait(false); }
+        catch (IOException error) { dispatcher.TryEnqueue(() => { Error = error.Message; Changed?.Invoke(false); }); }
         finally { writer.Release(); }
     }
     public async Task Apply(JsonObject changes, bool connect = false, string? password = null, bool interactive = false)
@@ -218,15 +220,31 @@ internal sealed class CoreClient : IAsyncDisposable
         PowerAvailable = available;
         return Send("power", new() { ["saver"] = saver, ["sleeping"] = sleeping, ["available"] = available });
     }
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync() => new(StopAsync(TimeSpan.FromSeconds(10)));
+    internal Task StopAsync(TimeSpan timeout) => shutdown ??= StopWorkerAsync(timeout);
+    private async Task StopWorkerAsync(TimeSpan limit)
     {
         stopping = true;
         if (process is { HasExited: false })
         {
-            await Send("quit");
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            try { await process.WaitForExitAsync(timeout.Token); }
-            catch (OperationCanceledException) { process.Kill(entireProcessTree: true); }
+            using var timeout = new CancellationTokenSource(limit);
+            try
+            {
+                await writer.WaitAsync(timeout.Token).ConfigureAwait(false);
+                try
+                {
+                    await process.StandardInput.WriteLineAsync("{\"command\":\"quit\"}".AsMemory(), timeout.Token).ConfigureAwait(false);
+                    await process.StandardInput.FlushAsync(timeout.Token).ConfigureAwait(false);
+                }
+                finally { writer.Release(); }
+                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception error) when (error is OperationCanceledException or IOException)
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+                catch (InvalidOperationException) when (process.HasExited) { }
+                await process.WaitForExitAsync().ConfigureAwait(false);
+            }
         }
         process?.Dispose(); writer.Dispose();
     }
