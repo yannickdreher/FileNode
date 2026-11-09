@@ -16,6 +16,8 @@ internal sealed class DesktopHost
     private Window? settings;
     private readonly CoreClient core;
     private readonly NativeTray tray;
+    private readonly WindowShutdown statusShutdown;
+    private WindowShutdown? settingsShutdown;
     private StackPanel activity = null!;
     private TextBlock summary = null!;
     private TextBlock account = null!;
@@ -37,6 +39,7 @@ internal sealed class DesktopHost
     public DesktopHost()
     {
         core = new CoreClient(status.DispatcherQueue);
+        statusShutdown = new WindowShutdown(status, EndSession);
         status.SystemBackdrop = new MicaBackdrop();
         status.AppWindow.Resize(new SizeInt32(380, 640));
 
@@ -66,8 +69,9 @@ internal sealed class DesktopHost
     public void Dispatch(Action action) => status.DispatcherQueue.TryEnqueue(() => action());
     public void Start(string? worker, string? profile, bool startBackground, bool startSettings)
     {
-        background = startBackground;
+        background = startBackground && !App.ShutdownTest;
         core.Start(worker, profile);
+        if (App.ShutdownTest) return;
         if (startSettings) ShowSettings();
         else if (!startBackground || !tray.Available) ShowStatus();
     }
@@ -182,15 +186,20 @@ internal sealed class DesktopHost
     }
     private void ShowSettings()
     {
+        EnsureSettings();
+        WindowChrome.Show(settings!);
+    }
+    private void EnsureSettings()
+    {
         if (settings is null)
         {
             settings = new Window { Title = "FileNode — " + core.T("tray.settings"), SystemBackdrop = new MicaBackdrop() };
+            settingsShutdown = new WindowShutdown(settings, EndSession);
             settings.AppWindow.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "filenode.ico"));
             settings.AppWindow.Resize(new SizeInt32(1000, 800));
             settings.AppWindow.Closing += (_, args) => { args.Cancel = true; settings.AppWindow.Hide(); if (!tray.Available) ShowStatus(); };
             BuildSettings();
         }
-        WindowChrome.Show(settings);
     }
     private void BuildSettings()
     {
@@ -405,6 +414,31 @@ internal sealed class DesktopHost
         if (quitting) return;
         quitting = true; tray.Dispose(); await core.DisposeAsync(); settings?.Close(); status.Close(); Application.Current.Exit();
     }
+    private void EndSession()
+    {
+        if (!quitting) { quitting = true; tray.Dispose(); }
+        // Windows may terminate this process when WM_ENDSESSION returns. Drain
+        // the worker first; its I/O continuations must not require this UI thread.
+        try { core.StopAsync(TimeSpan.FromSeconds(4)).GetAwaiter().GetResult(); }
+        catch (Exception error) { App.RecordSelfTestFailure(error); }
+        Application.Current.Exit();
+    }
+    internal async Task PrepareShutdownTest(string directory)
+    {
+        var limit = DateTime.UtcNow.AddSeconds(15);
+        while (!core.Ready && DateTime.UtcNow < limit) await Task.Delay(25);
+        if (!core.Ready || core.WorkerId is null || core.Authenticated || core.Running)
+            throw new InvalidOperationException("Isolated shutdown worker was not ready");
+        EnsureSettings();
+        status.AppWindow.Show(false);
+        settings!.AppWindow.Show(false);
+        File.WriteAllText(Path.Combine(directory, "shutdown-ready.json"), System.Text.Json.JsonSerializer.Serialize(new
+        {
+            ui = Environment.ProcessId, worker = core.WorkerId,
+            status = WinRT.Interop.WindowNative.GetWindowHandle(status).ToInt64(),
+            settings = WinRT.Interop.WindowNative.GetWindowHandle(settings).ToInt64(), tray = tray.Available
+        }));
+    }
     internal async Task RunSmokeTest(string directory)
     {
         App.SelfTestProgress("wait for worker");
@@ -413,6 +447,10 @@ internal sealed class DesktopHost
         if (!core.Ready || core.Error != "") throw new InvalidOperationException("UI smoke test worker did not become ready: " + core.Error);
         App.SelfTestProgress("open status and settings");
         ShowStatus(); ShowSettings();
+        await Task.Delay(100);
+        // A desktop test launched in the background cannot override Windows'
+        // foreground lock. Report that limitation rather than failing shutdown/UI checks.
+        var testTrayActivation = tray.Available && WindowChrome.OwnsForeground(settings!);
         if (tray.Available)
         {
             App.SelfTestProgress("native popup frame and repeated tray activation");
@@ -427,6 +465,11 @@ internal sealed class DesktopHost
             foreach (var theme in new[] { ElementTheme.Dark, ElementTheme.Light })
             {
                 content.RequestedTheme = theme;
+                if (!testTrayActivation)
+                {
+                    ShowStatus(); await Task.Delay(100); WindowChrome.VerifyPopupFrame(status);
+                    continue;
+                }
                 for (var repeat = 0; repeat < 3; repeat++)
                 {
                     ShowSettings();
@@ -520,7 +563,7 @@ internal sealed class DesktopHost
         if (!File.Exists(Path.Combine(first, "keep.txt")) || !Directory.Exists(second)) throw new InvalidOperationException("Stopping sync removed a selected folder");
         if (core.Running) throw new InvalidOperationException("Offline UI smoke test unexpectedly started synchronization");
         File.WriteAllText(Path.Combine(directory, "ui-smoke.json"), System.Text.Json.JsonSerializer.Serialize(new
-        { passed = true, pages = 4, languages = 2, folders = 2, stopPreservesFiles = true, independentStates = true, uniqueFileRows = true, nativePopupFrame = tray.Available, repeatedTrayActivation = tray.Available }));
+        { passed = true, pages = 4, languages = 2, folders = 2, stopPreservesFiles = true, independentStates = true, uniqueFileRows = true, nativePopupFrame = tray.Available, repeatedTrayActivation = testTrayActivation }));
         App.SelfTestProgress("quit");
         await Quit();
     }

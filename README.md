@@ -29,7 +29,7 @@ Both frontends share `locales/en.json` and `locales/de.json`, the configuration 
 
 ## Install on Windows
 
-**Installer (0.2.2 and later):** download `filenode-X.Y.Z-windows-x86_64-setup.exe` from [Releases](https://github.com/yannickdreher/FileNode/releases) and run it. It installs for the current user in `%LOCALAPPDATA%\Programs\FileNode`, adds a Start menu shortcut and an uninstaller, and does not request administrator rights or import certificates. Quit FileNode from the tray before updating an existing installation. Setup supports English/German and follows the Windows light/dark appearance. Enable login startup later in FileNode's General settings if desired.
+**Installer (0.2.2 and later):** download `filenode-X.Y.Z-windows-x86_64-setup.exe` from [Releases](https://github.com/yannickdreher/FileNode/releases) and run it. It installs for the current user in `%LOCALAPPDATA%\Programs\FileNode`, adds a Start menu shortcut and an uninstaller, and does not request administrator rights or import certificates. When upgrading from 0.2.4 or earlier, quit FileNode from the tray once before installing. Corrected builds cooperate with the installer to stop the desktop and worker automatically. Setup supports English/German and follows the Windows light/dark appearance. Enable login startup later in FileNode's General settings if desired.
 
 The setup executable is currently unsigned, so Windows may show an unknown-publisher or SmartScreen notice. Managed device policies can restrict unsigned applications. The installer does not change Windows security settings. Uninstall removes installed application files and its own startup entry; your configuration, saved credentials and synchronized folders are retained.
 

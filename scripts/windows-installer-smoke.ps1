@@ -23,6 +23,8 @@ try {
     if ((Get-ItemProperty -LiteralPath $driveRegistration).DisplayVersion -ne $Version) { throw 'Installed version does not match the release.' }
     $driveActual = & (Join-Path $driveInstallRoot 'filenode-core.exe') --version
     if ($LASTEXITCODE -ne 0 -or $driveActual -ne "filenode $Version") { throw 'Installed worker has an incorrect version.' }
+    # Exercise a real in-place upgrade with an isolated running UI and worker.
+    & (Join-Path $PSScriptRoot 'windows-shutdown-smoke.ps1') -Executable (Join-Path $driveInstallRoot 'filenode-ui.exe') -Installer $driveSetup -OutputDirectory (Join-Path $driveInstallRoot 'shutdown-fixtures')
     # An uninstaller must remove only its registered payload, not user-created files.
     Set-Content -LiteralPath (Join-Path $driveInstallRoot 'keep.txt') -Value 'Unowned smoke fixture'
     $driveProcess = Start-Process -FilePath (Join-Path $driveInstallRoot 'unins000.exe') -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART') -WindowStyle Hidden -Wait -PassThru
@@ -32,7 +34,7 @@ try {
     if ((Test-Path -LiteralPath $driveRegistration) -or (Test-Path -LiteralPath $driveShortcut) -or (Test-Path -LiteralPath (Join-Path $driveInstallRoot 'filenode-core.exe'))) { throw 'Uninstaller left registered files or shortcuts.' }
     if (!(Test-Path -LiteralPath (Join-Path $driveInstallRoot 'keep.txt'))) { throw 'Uninstaller removed an unowned file.' }
     $driveUninstalled = $true
-    Write-Output 'Windows installer smoke passed: install, payload, Start menu, version, uninstall, unowned file preserved; no account or UI launched.'
+    Write-Output 'Windows installer smoke passed: install, payload, Start menu, version, live upgrade, clean UI/worker shutdown, uninstall, unowned file preserved; no real account accessed.'
 } finally {
     # Never recursively remove a computed target outside the verified runner temp root.
     if ($driveUninstalled -and $driveInstallRoot.StartsWith($driveTempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {

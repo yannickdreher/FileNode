@@ -13,7 +13,8 @@ public partial class App : Application
     }
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetCurrentPackageFullName(ref uint length, nint name);
-    internal static string? SelfTestDirectory => Option("--self-test");
+    internal static bool ShutdownTest => Has("--shutdown-test");
+    internal static string? SelfTestDirectory => Option("--self-test") ?? Option("--shutdown-test");
     private static string selfTestStage = "initialize resources";
     public App()
     {
@@ -64,7 +65,11 @@ public partial class App : Application
             var activation = AppInstance.GetCurrent().GetActivatedEventArgs();
             SelfTestProgress("start worker");
             host.Start(Option("--core"), profile, Has("--background") || activation.Kind == ExtendedActivationKind.StartupTask, Has("--settings"));
-            if (SelfTestDirectory is string testDirectory) await host.RunSmokeTest(testDirectory);
+            if (SelfTestDirectory is string testDirectory)
+            {
+                if (ShutdownTest) await host.PrepareShutdownTest(testDirectory);
+                else await host.RunSmokeTest(testDirectory);
+            }
         }
         catch (Exception exception) { RecordSelfTestFailure(exception); throw; }
     }

@@ -30,7 +30,9 @@ SolidCompression=yes
 WizardStyle=modern dynamic
 DisableProgramGroupPage=yes
 CloseApplications=yes
-CloseApplicationsFilter=filenode-ui.exe,filenode-core.exe
+; The desktop host cooperatively stops its own Rust child before exiting.
+; Do not independently send console shutdown to the worker during that cleanup.
+CloseApplicationsFilter=filenode-ui.exe
 RestartApplications=no
 
 [Languages]
