@@ -97,13 +97,18 @@ pub fn plan_protected(
         }
         actions.push(action);
     }
-    let count = actions.iter().filter(|a| a.is_delete()).count();
+    // Local removals only move existing server objects to the recoverable trash.
+    // Do not apply a batch-size cap to that direction. Keep the guard for server
+    // removals that would delete many local working copies.
+    let count = actions
+        .iter()
+        .filter(|a| matches!(a, Action::DeleteLocal(_)))
+        .count();
     let fraction_limit = (base.len() * config.max_delete_percent / 100).max(3);
     if count > config.max_delete_count || count > fraction_limit {
-        bail!("Deletion protection: {count} deletions planned. Limits: {} absolute, {} relative. Check the cause before proceeding; no files have been changed.", config.max_delete_count, fraction_limit);
+        bail!("Local deletion protection: {count} local deletions planned. Limits: {} absolute, {} relative. Check the cause before proceeding; no files have been changed.", config.max_delete_count, fraction_limit);
     }
     // One remote directory move preserves the entire deleted tree in the trash.
-    // Keep the mass-deletion guard above based on the full affected entry count.
     let deleted_directories: Vec<_> = actions
         .iter()
         .filter_map(|action| match action {
@@ -224,14 +229,26 @@ mod tests {
         );
     }
     #[test]
-    fn mass_deletion_is_blocked() {
+    fn large_local_deletions_move_to_server_trash_without_a_count_limit() {
         let mut b = Baselines::new();
         let mut r = RemoteTree::new();
         for i in 0..100 {
             b.insert(i.to_string(), base()["a"].clone());
             r.insert(i.to_string(), node("old"));
         }
-        assert!(plan(&LocalTree::new(), &r, &b, &cfg()).is_err());
+        let actions = plan(&LocalTree::new(), &r, &b, &cfg()).unwrap();
+        assert_eq!(actions.len(), 100);
+        assert!(actions.iter().all(|a| matches!(a, Action::DeleteRemote(_))));
+    }
+    #[test]
+    fn large_remote_deletions_still_protect_local_working_copies() {
+        let mut b = Baselines::new();
+        let mut local = LocalTree::new();
+        for i in 0..100 {
+            b.insert(i.to_string(), base()["a"].clone());
+            local.insert(i.to_string(), file("old"));
+        }
+        assert!(plan(&local, &RemoteTree::new(), &b, &cfg()).is_err());
     }
     #[test]
     fn deletion_propagation_can_be_disabled() {

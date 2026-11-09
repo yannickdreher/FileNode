@@ -16,7 +16,7 @@ Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regel
 - Mehrere lokale Ordner pro Konto, Serverordner mit dem Namen der jeweiligen Auswahl und getrennte Zustände/Wiederholungen je Ordner.
 - Vollständige lokale Dateien, bidirektionaler Abgleich, SHA-256-Inhaltsvergleich, SQLite-Dreiwege-Abgleich und dauerhaftes Journal.
 - Bei Konflikten bleiben beide Fassungen erhalten. Remote-Umbenennungen nutzen stabile IDs; eindeutige lokale Dateiumbenennungen erhalten die Server-Identität.
-- Löschungen werden über den gemeinsamen Server-Papierkorb abgeglichen, kompatibel mit Bulwark und mit Schutz vor Massenlöschungen. Kein `FileNode/destroy`. Siehe [Papierkorb-Verhalten](docs/deletions.md).
+- Lokale Löschungen verschieben Dateien und ganze Ordnerbäume automatisch in den gemeinsamen Server-Papierkorb, auch bei großen Mengen und kompatibel mit Bulwark. In Gegenrichtung schützen Mengenbegrenzungen vor massenhaftem Entfernen lokaler Arbeitskopien. Kein `FileNode/destroy`. Siehe [Papierkorb-Verhalten](docs/deletions.md).
 - Native Dateisystem-Ereignisse unter Windows und Linux, Bündelung von Änderungen, Hash-Cache, regelmäßige vollständige Kontrolle und JMAP `FileNode/changes`.
 - Bearbeitbare Ausschlüsse für temporäre Dateien, Office-Sperrdateien und unvollständige Downloads, in beide Richtungen ohne Löschung vorhandener Kopien. [Regeln](docs/exclusions.md).
 - Vom Server ermittelte Uploadgrenzen, optionales eigenes Dateilimit und 1–16 parallele Blob-Uploads innerhalb der Servergrenze. Zu große Dateien erhalten eine eigene Warnung; andere Dateien laufen weiter. [Übertragungen](docs/transfers.md).

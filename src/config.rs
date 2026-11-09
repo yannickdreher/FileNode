@@ -50,6 +50,8 @@ pub struct Config {
     pub pause_on_power_saver: bool,
     pub autostart: bool,
     pub propagate_deletes: bool,
+    /// Batch limits apply to server-driven removals of local working copies.
+    /// Local deletions move server objects to trash automatically at any size.
     pub max_delete_count: usize,
     pub max_delete_percent: usize,
     pub max_file_bytes: u64,

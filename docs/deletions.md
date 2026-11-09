@@ -1,6 +1,8 @@
 # Trash and synchronization
 
-With **Sync deletions in both directions** enabled, deleting an already synchronized local file moves its existing server FileNode into the account's trash. Moving a server file into the trash removes the local working copy at the next successful reconciliation. Restoring it on the server downloads it to the selected local tree again. Initial absence never counts as deletion, and a local unsynchronized edit wins over a remote deletion. Mass-deletion limits remain in effect.
+With **Sync deletions in both directions** enabled, deleting an already synchronized local file moves its existing server FileNode into the account's trash. This is automatic even for large batches: deleting a folder containing hundreds of files moves the existing server tree to trash without a confirmation or a manual deletion in the web client. Moving a server file into the trash removes the local working copy at the next successful reconciliation. Restoring it on the server downloads it to the selected local tree again. Initial absence never counts as deletion, and a local unsynchronized edit wins over a remote deletion.
+
+The `max_delete_count` and `max_delete_percent` limits apply only to server-driven deletion of local working copies. They do not cap local-to-server trash moves. Complete local scans, pinned root/account checks, exclusion handling, concurrent-change checks and conditional server writes still apply in both directions. An unavailable selected root or a failed scan never counts as an empty folder.
 
 New profiles enable deletion propagation. An existing profile's explicit setting is retained. Isolated debug profiles disable it. Removing a folder selection with **Stop sync** never deletes its local or remote files.
 

@@ -953,6 +953,90 @@ fn deleting_a_directory_preserves_its_tree_in_one_bulwark_compatible_trash_batch
 }
 
 #[test]
+fn deleting_368_local_entries_moves_one_intact_server_tree_and_other_files_keep_syncing() {
+    let mut f = Fixture::new();
+    fs::create_dir(f.folder.path().join("Books")).unwrap();
+    for section in 1..8 {
+        fs::create_dir(f.folder.path().join(format!("Books/Section{section}"))).unwrap();
+    }
+    let paths: Vec<_> = (0..360)
+        .map(|index| {
+            let section = index / 45;
+            if section == 0 {
+                format!("Books/book{index}.txt")
+            } else {
+                format!("Books/Section{section}/book{index}.txt")
+            }
+        })
+        .collect();
+    for (index, path) in paths.iter().enumerate() {
+        f.local(path, &format!("Book {index}"));
+    }
+    assert_eq!(f.run().unwrap().uploaded, 368);
+    let root = f.server.node(f.config.remote_folder_name().unwrap()).id;
+    let books = f.server.node("Books").id;
+    let originals = f.server.nodes.clone();
+    fs::remove_dir_all(f.folder.path().join("Books")).unwrap();
+    f.local("new.txt", "Unrelated new file");
+
+    let report = f.run().unwrap();
+    assert_eq!(report.recycled, 1);
+    assert_eq!(report.uploaded, 1);
+    assert_eq!(report.blocked, 0);
+    let moved = f.server.nodes.iter().find(|node| node.id == books).unwrap();
+    let batch = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| Some(&node.id) == moved.parent_id.as_ref())
+        .unwrap();
+    let trash = f
+        .server
+        .nodes
+        .iter()
+        .find(|node| Some(&node.id) == batch.parent_id.as_ref())
+        .unwrap();
+    assert_eq!(trash.role.as_deref(), Some("trash"));
+    assert!(batch.name.ends_with(&format!("~{root}")));
+    // Every server object and blob survives; only the deleted tree's root moves.
+    for before in &originals {
+        let after = f
+            .server
+            .nodes
+            .iter()
+            .find(|node| node.id == before.id)
+            .unwrap();
+        assert_eq!(after.name, before.name);
+        assert_eq!(after.blob_id, before.blob_id);
+        if before.id != books {
+            assert_eq!(after.parent_id, before.parent_id);
+        }
+    }
+    let store = Store::open(&f.config).unwrap();
+    assert_eq!(store.baselines().unwrap().len(), 1);
+    drop(store);
+    let writes = f.server.writes;
+    let report = f.run().unwrap();
+    assert_eq!(report.recycled + report.uploaded + report.downloaded, 0);
+    assert_eq!(f.server.writes, writes);
+    assert!(!f.folder.path().join("Books").exists());
+
+    // A normal server-side restore downloads the whole tree again.
+    f.server
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == books)
+        .unwrap()
+        .parent_id = Some(root);
+    f.server.revision += 1;
+    assert_eq!(f.run().unwrap().downloaded, 368);
+    for (index, path) in paths.iter().enumerate() {
+        assert_eq!(f.read(path), format!("Book {index}"));
+    }
+    assert_eq!(f.read("new.txt"), "Unrelated new file");
+}
+
+#[test]
 fn moving_a_remote_file_to_trash_removes_the_local_copy_and_never_syncs_trash_contents() {
     let mut f = Fixture::new();
     f.local("a.txt", "one");

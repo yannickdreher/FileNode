@@ -16,7 +16,7 @@ Both frontends share `locales/en.json` and `locales/de.json`, the configuration 
 - Multiple local folders per account, with automatic server folders named after each selection and independent retry/state for each folder.
 - Bidirectional full-file synchronization, SHA-256 comparison, SQLite three-way baselines and a durable operation journal.
 - Both copies survive conflicts; stable remote IDs support remote renames, and unambiguous local file renames preserve server identity.
-- Bidirectional deletions use the server trash, interoperating with Bulwark and retaining mass-deletion limits. Remote `FileNode/destroy` is never called. [Trash behavior](docs/deletions.md).
+- Local deletions automatically move server files and entire folder trees to the shared trash, including large batches, interoperating with Bulwark. Mass-deletion limits protect the reverse direction when removing local working copies. Remote `FileNode/destroy` is never called. [Trash behavior](docs/deletions.md).
 - Native file events (`notify`: inotify on Linux, ReadDirectoryChangesW on Windows), debouncing, event-invalidated content hashes, periodic full verification and JMAP `FileNode/changes`.
 - Editable exclusions for temporary files, Office lock files and partial downloads, applied symmetrically without deleting existing copies. [Rules](docs/exclusions.md).
 - Server-discovered upload limits, an optional user size cap and 1–16 parallel blob uploads bounded by the server; FileNode commits remain serial. Oversized files show individual warnings while other files continue. [Transfer behavior](docs/transfers.md).
