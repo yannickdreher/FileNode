@@ -1049,9 +1049,12 @@ impl Request {
                 },
             },
         };
-        unsafe {
-            CfExecute(&info, &mut params)?;
-        }
+        let result = unsafe { CfExecute(&info, &mut params) };
+        #[cfg(test)]
+        eprintln!(
+            "Cloud transfer offset={offset} length={length} status={status:?} result={result:?}"
+        );
+        result.context("Transfer Cloud Files range")?;
         Ok(())
     }
     fn fail(&self, status: NTSTATUS) {
@@ -1102,6 +1105,11 @@ unsafe extern "system" fn fetch(
 }
 unsafe fn fetch_inner(info: &CF_CALLBACK_INFO, params: &CF_CALLBACK_PARAMETERS) {
     let fetch = params.Anonymous.FetchData;
+    #[cfg(test)]
+    eprintln!(
+        "Cloud fetch offset={} length={} file_size={} flags={:?}",
+        fetch.RequiredFileOffset, fetch.RequiredLength, info.FileSize, fetch.Flags
+    );
     let mut request = Request {
         connection: info.ConnectionKey,
         transfer: info.TransferKey,
@@ -1223,6 +1231,8 @@ unsafe fn fetch_inner(info: &CF_CALLBACK_INFO, params: &CF_CALLBACK_PARAMETERS) 
                     activity.finish("synced");
                     Ok(())
                 }));
+            #[cfg(test)]
+            if let Ok(Err(error)) = &result { eprintln!("Cloud worker completed={completed}: {error:#}"); }
             if !matches!(result, Ok(Ok(()))) {
                 request.fail_remaining(completed, if cancel.load(Ordering::SeqCst) {
                     STATUS_CANCELLED
@@ -1263,6 +1273,13 @@ unsafe extern "system" fn cancel_fetch(
                 continue;
             }
             let range = (*params).Anonymous.Cancel.Anonymous.FetchData;
+            #[cfg(test)]
+            eprintln!(
+                "Cloud cancel offset={} length={} flags={:?}",
+                range.FileOffset,
+                range.Length,
+                (*params).Anonymous.Cancel.Flags
+            );
             let end = if range.Length == CF_EOF {
                 i64::MAX
             } else {

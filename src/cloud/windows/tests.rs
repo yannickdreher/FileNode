@@ -517,7 +517,7 @@ fn native_placeholder_hydration_and_eviction() -> Result<()> {
         "metadata access hydrated a placeholder"
     );
     assert_eq!(
-        std::fs::read(&target).context("Read hydrated payload")?,
+        std::fs::read(&target).context("Read initially online-only payload")?,
         bytes.data
     );
     assert!(bytes.requests.load(Ordering::SeqCst) > 0);
@@ -550,7 +550,7 @@ fn native_placeholder_hydration_and_eviction() -> Result<()> {
         assert!(placeholder_handle(&file)?.unwrap().on_disk > 0);
     }
     assert_eq!(
-        std::fs::read(&target).context("Read hydrated payload")?,
+        std::fs::read(&target).context("Read payload after nonzero range hydration")?,
         bytes.data
     );
     // Fail a separate request after delivering aligned pages. Retrying the
