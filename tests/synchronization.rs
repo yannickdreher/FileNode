@@ -609,6 +609,7 @@ fn parallel_blobs_obey_server_and_user_limits_then_commit_serially() {
     struct Upload {
         active: AtomicUsize,
         peak: AtomicUsize,
+        first_pair: (std::sync::Mutex<usize>, std::sync::Condvar),
         policy: Arc<filenode::runtime::Policy>,
     }
     impl filenode::jmap::Uploader for Upload {
@@ -619,7 +620,19 @@ fn parallel_blobs_obey_server_and_user_limits_then_commit_serially() {
             let count = self.active.fetch_add(1, Ordering::SeqCst) + 1;
             self.peak.fetch_max(count, Ordering::SeqCst);
             assert_eq!(fs::read(path)?.len() as u64, size);
-            std::thread::sleep(std::time::Duration::from_millis(40));
+            // Staging can take longer than a fixed sleep on a busy runner.
+            // Require the first two uploads to overlap with a bounded rendezvous.
+            let (arrivals, ready) = &self.first_pair;
+            let mut arrivals = arrivals.lock().unwrap();
+            *arrivals += 1;
+            ready.notify_all();
+            let (arrivals, _) = ready
+                .wait_timeout_while(arrivals, std::time::Duration::from_secs(10), |count| {
+                    *count < 2
+                })
+                .unwrap();
+            assert!(*arrivals >= 2, "Upload workers did not run concurrently");
+            drop(arrivals);
             self.active.fetch_sub(1, Ordering::SeqCst);
             Ok(uuid::Uuid::new_v4().to_string())
         }
@@ -630,6 +643,7 @@ fn parallel_blobs_obey_server_and_user_limits_then_commit_serially() {
     let upload = Arc::new(Upload {
         active: AtomicUsize::new(0),
         peak: AtomicUsize::new(0),
+        first_pair: Default::default(),
         policy: filenode::runtime::Policy::new(
             &f.config,
             Arc::new(AtomicBool::new(false)),
