@@ -39,6 +39,7 @@ zeroize = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 keyring = { version = "3.6", features = ["windows-native"], optional = true }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_CloudFilters", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_CorrelationVector", "Win32_System_Com", "Win32_System_WinRT", "Win32_System_Threading", "Win32_Security_Authorization", "Storage_Provider", "Storage", "Storage_Search", "Storage_Streams", "Foundation", "Foundation_Collections", "Security_Cryptography", "Win32_Security"] }
 winreg = { version = "0.55", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -21,6 +21,9 @@ download_limit_kib = 0
 file_settle_seconds = 2
 pause_on_power_saver = true
 autostart = false
+# Windows only: Explorer placeholders, download on open and native pin/free-space menus.
+# Use a separate local NTFS folder outside other cloud providers. See docs/cloud-files.md.
+files_on_demand = false
 propagate_deletes = true
 max_delete_count = 20
 max_delete_percent = 25

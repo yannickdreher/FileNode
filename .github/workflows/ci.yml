@@ -68,6 +68,12 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked --all-targets
       - run: cargo build --locked
+      - name: Native Windows Cloud Files lifecycle
+        shell: powershell
+        run: |
+          if ((Get-Service CldFlt).Status -ne 'Running') { Start-Service CldFlt }
+          cargo test --locked --lib cloud::windows::tests:: -- --ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { throw 'Native Cloud Files acceptance failed' }
       - name: Build native WinUI frontend
         shell: powershell
         run: ./scripts/build-windows.ps1 -RustCorePath target/debug/filenode.exe -OutputDirectory .dev/windows-ci

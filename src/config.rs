@@ -49,6 +49,9 @@ pub struct Config {
     pub file_settle_seconds: u64,
     pub pause_on_power_saver: bool,
     pub autostart: bool,
+    /// Windows Cloud Files placeholders and Explorer availability controls.
+    /// Opt-in preserves existing fully local roots on upgrade.
+    pub files_on_demand: bool,
     pub propagate_deletes: bool,
     /// Batch limits apply to server-driven removals of local working copies.
     /// Local deletions move server objects to trash automatically at any size.
@@ -86,6 +89,7 @@ impl Default for Config {
             file_settle_seconds: 2,
             pause_on_power_saver: true,
             autostart: false,
+            files_on_demand: false,
             propagate_deletes: true,
             max_delete_count: 20,
             max_delete_percent: 25,
@@ -105,6 +109,9 @@ impl Config {
         self.validate_folders()
     }
     pub fn validate_account(&self) -> Result<()> {
+        if self.files_on_demand && !cfg!(windows) {
+            bail!("Files On-Demand requires Windows; Linux uses fully local synchronization");
+        }
         crate::exclusions::Exclusions::new(&self.exclude_patterns)?;
         let url = Url::parse(&self.server).context("Invalid server URL")?;
         if url.scheme() != "https" || url.host_str().is_none() {
@@ -316,6 +323,18 @@ impl Config {
             Ok(self.remote_folder_name()?.to_owned())
         } else {
             Ok(self.resolved_remote_path.clone())
+        }
+    }
+
+    pub fn private_directory(&self) -> Result<PathBuf> {
+        if self.files_on_demand {
+            Ok(directories::ProjectDirs::from("", "", "FileNode")
+                .context("Local application data directory unavailable")?
+                .data_local_dir()
+                .join("cloud")
+                .join(crate::cloud::root_key(self)?))
+        } else {
+            Ok(self.local_folder.join(crate::filesystem::PRIVATE_DIR))
         }
     }
 

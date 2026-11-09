@@ -26,6 +26,66 @@ fn multiple_folder_config(home: &Path) -> Config {
 }
 
 #[test]
+fn folder_failures_reuse_the_account_session_and_obey_retry_deadlines() {
+    use filenode::group::{SyncGroup, SyncSession};
+    let home = tempfile::tempdir().unwrap();
+    let mut config = multiple_folder_config(home.path());
+    config.sync_folders.as_mut().unwrap().truncate(1);
+    let root = config.sync_folders.as_ref().unwrap()[0]
+        .local_folder
+        .clone();
+    let mut group = SyncGroup::new(&config).unwrap();
+    fs::remove_dir(&root).unwrap();
+    let mut session = SyncSession::default();
+    let mut connections = 0;
+    let cancel = AtomicBool::new(false);
+    let mut connect = || {
+        connections += 1;
+        Ok(Server::default())
+    };
+    assert_eq!(
+        session
+            .poll(&mut group, &mut connect, &cancel, &mut |_| {})
+            .unwrap()
+            .unwrap()
+            .failed_folders,
+        1
+    );
+    for _ in 0..100 {
+        assert!(session
+            .poll(&mut group, &mut connect, &cancel, &mut |_| {})
+            .unwrap()
+            .is_none());
+    }
+    // An explicit check can retry now, but it still uses the same transport.
+    group.invalidate();
+    assert_eq!(
+        session
+            .poll(&mut group, &mut connect, &cancel, &mut |_| {})
+            .unwrap()
+            .unwrap()
+            .failed_folders,
+        1
+    );
+    // Even after an actual session reset, the folder deadline still applies.
+    session.reset();
+    assert!(session
+        .poll(&mut group, &mut connect, &cancel, &mut |_| {})
+        .unwrap()
+        .is_none());
+    fs::create_dir(&root).unwrap();
+    fs::write(root.join("recovered.txt"), "available").unwrap();
+    group.invalidate();
+    let report = session
+        .poll(&mut group, &mut connect, &cancel, &mut |_| {})
+        .unwrap()
+        .unwrap();
+    assert_eq!(report.failed_folders, 0);
+    assert_eq!(report.uploaded, 1);
+    assert_eq!(connections, 2);
+}
+
+#[test]
 fn multiple_folders_use_leaf_names_and_stop_without_deleting() {
     use filenode::group::SyncGroup;
     let home = tempfile::tempdir().unwrap();

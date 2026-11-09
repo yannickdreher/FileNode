@@ -213,7 +213,10 @@ fn connection(
             last_ping = Instant::now();
         }
     }
-    // Dropping the socket also cancels a stale connection after power changes.
+    // Send a close frame when possible, then always release the TCP socket.
+    // Do not wait for a peer reply during shutdown or a network transition.
+    let _ = socket.close(None);
+    let _ = socket.flush();
     Ok(())
 }
 
@@ -314,6 +317,71 @@ mod tests {
         command.send(()).unwrap();
         server.join().unwrap();
         drop(push);
+    }
+
+    #[test]
+    #[allow(clippy::result_large_err)]
+    fn dropping_push_closes_the_socket_and_stops_reconnecting() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = Url::parse(&format!("ws://{}/push", listener.local_addr().unwrap())).unwrap();
+        let (ready, subscribed) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline);
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut socket = tungstenite::accept_hdr(
+                stream,
+                |_: &tungstenite::handshake::server::Request,
+                 mut response: tungstenite::handshake::server::Response| {
+                    response.headers_mut().insert(
+                        "Sec-WebSocket-Protocol",
+                        tungstenite::http::HeaderValue::from_static("jmap"),
+                    );
+                    Ok(response)
+                },
+            )
+            .unwrap();
+            assert!(matches!(socket.read().unwrap(), Message::Text(_)));
+            ready.send(()).unwrap();
+            assert!(
+                matches!(socket.read().unwrap(), Message::Close(_)),
+                "push socket was not closed gracefully"
+            );
+            let _ = socket.flush();
+            drop(socket);
+            thread::sleep(Duration::from_millis(1200));
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == io::ErrorKind::WouldBlock),
+                "stopped push worker reconnected"
+            );
+        });
+        let policy = Policy::new(
+            &crate::config::Config::default(),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Default::default()),
+        );
+        let push = Push::start(
+            url,
+            Authentication::basic("user", "fixture".into()),
+            "account".into(),
+            policy,
+        );
+        subscribed.recv_timeout(Duration::from_secs(5)).unwrap();
+        drop(push);
+        worker.join().unwrap();
     }
 
     #[test]

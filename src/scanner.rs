@@ -33,7 +33,7 @@ fn fingerprint(path: &Path) -> Result<Fingerprint> {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0 {
+        if metadata.file_attributes() & 0x400 != 0 && !crate::cloud::is_owned(path)? {
             bail!("Reparse point encountered while scanning");
         }
     }
@@ -130,6 +130,8 @@ impl Signals {
 }
 
 pub struct LocalScanner {
+    #[cfg(windows)]
+    cloud: Option<crate::cloud::Provider>,
     root: PathBuf,
     cache: HashMap<String, (Fingerprint, LocalEntry)>,
     signals: Arc<Signals>,
@@ -159,6 +161,8 @@ impl LocalScanner {
             })
             .ok();
         Self {
+            #[cfg(windows)]
+            cloud: None,
             root,
             cache: HashMap::new(),
             signals,
@@ -180,6 +184,51 @@ impl LocalScanner {
 
     pub fn set_settle_seconds(&mut self, seconds: u64) {
         self.settle = Duration::from_secs(seconds);
+    }
+
+    pub fn connect_cloud(
+        &mut self,
+        config: &crate::config::Config,
+        remote: &dyn crate::jmap::Remote,
+    ) -> Result<()> {
+        #[cfg(windows)]
+        if config.files_on_demand {
+            let downloader = remote
+                .downloader()
+                .ok_or_else(|| anyhow::anyhow!("This transport does not support Cloud Files"))?;
+            if let Some(provider) = &self.cloud {
+                provider.set_downloader(downloader);
+            } else {
+                self.cloud = Some(crate::cloud::Provider::connect(config, downloader)?);
+            }
+        }
+        #[cfg(not(windows))]
+        let _ = (config, remote);
+        Ok(())
+    }
+
+    pub fn publish_cloud(
+        &self,
+        path: &str,
+        node: &crate::model::Node,
+        local: Option<&LocalEntry>,
+    ) -> Result<LocalEntry> {
+        #[cfg(windows)]
+        if let Some(provider) = &self.cloud {
+            return provider.publish(path, node, local);
+        }
+        let _ = (path, node);
+        local
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Cloud Files provider is not connected"))
+    }
+
+    pub fn cloud_availability(&self) -> Result<()> {
+        #[cfg(windows)]
+        if let Some(provider) = &self.cloud {
+            provider.availability()?;
+        }
+        Ok(())
     }
 
     pub fn set_exclusions(&mut self, patterns: &[String]) -> Result<()> {
@@ -257,6 +306,11 @@ impl LocalScanner {
             &self.exclusions,
             &mut self.omitted,
             |path, relative| {
+                // Querying metadata never opens the data stream or hydrates an
+                // online-only file. Hydration and eviction retain this identity.
+                if let Some(entry) = crate::cloud::committed_entry(path)? {
+                    return Ok(entry);
+                }
                 let before = fingerprint(path)?;
                 if before.length > max_bytes {
                     self.oversized.insert(relative.to_owned(), before.length);

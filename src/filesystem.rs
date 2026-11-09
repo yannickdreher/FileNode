@@ -65,7 +65,9 @@ pub fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
                 bail!("Symbolic link in sync path: {relative}")
             }
             #[cfg(windows)]
-            Ok(m) if is_reparse(&m) => bail!("Reparse point in sync path: {relative}"),
+            Ok(m) if is_reparse(&m) && !crate::cloud::is_owned(&path)? => {
+                bail!("Foreign reparse point in sync path: {relative}")
+            }
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
@@ -82,12 +84,13 @@ fn is_reparse(m: &fs::Metadata) -> bool {
 
 pub fn hash_file(path: &Path, max_bytes: u64) -> Result<LocalEntry> {
     let mut file = open_snapshot(path)?;
+    hash_snapshot(&mut file, max_bytes).with_context(|| format!("Read snapshot {}", path.display()))
+}
+
+pub(crate) fn hash_snapshot(file: &mut File, max_bytes: u64) -> Result<LocalEntry> {
     let before = file.metadata()?;
     if !before.is_file() || before.len() > max_bytes {
-        bail!(
-            "File exceeds size limit or is not a regular file: {}",
-            path.display()
-        );
+        bail!("File exceeds size limit or is not a regular file");
     }
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 65536];
@@ -109,7 +112,7 @@ pub fn hash_file(path: &Path, max_bytes: u64) -> Result<LocalEntry> {
         || before.modified()? != after.modified()?
         || total != after.len()
     {
-        bail!("File changed while being read: {}", path.display());
+        bail!("File changed while being read");
     }
     Ok(LocalEntry {
         kind: Kind::File,
@@ -248,7 +251,10 @@ pub fn verify_local(
             hash: "directory".into(),
             size: 0,
         }),
-        Ok(m) if m.is_file() => Some(hash_file(&target, max)?),
+        Ok(m) if m.is_file() => Some(match crate::cloud::committed_entry(&target)? {
+            Some(entry) => entry,
+            None => hash_file(&target, max)?,
+        }),
         Ok(_) => bail!("File type changed: {path}"),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(e.into()),
@@ -260,15 +266,56 @@ pub fn verify_local(
 }
 
 pub fn preserve(root: &Path, relative: &str) -> Result<PathBuf> {
+    preserve_in(root, relative, &root.join(PRIVATE_DIR))
+}
+pub fn preserve_in(root: &Path, relative: &str, private: &Path) -> Result<PathBuf> {
     let source = checked_path(root, relative)?;
-    let history = root
-        .join(PRIVATE_DIR)
+    let history = private
         .join("history")
         .join(uuid::Uuid::new_v4().to_string());
     fs::create_dir_all(&history)?;
     let dest = history.join(source.file_name().context("File name is missing")?);
-    fs::rename(&source, &dest).context("Preserve previous version for recovery")?;
-    Ok(dest)
+    match fs::rename(&source, &dest) {
+        Ok(()) => Ok(dest),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            // Cloud state can live on a different volume. Keep recovery moves
+            // atomic by retaining that version in the root's excluded history.
+            let local_private = root.join(PRIVATE_DIR);
+            crate::store::ensure_state_directory(&local_private)?;
+            let history = local_private
+                .join("history")
+                .join(uuid::Uuid::new_v4().to_string());
+            fs::create_dir(&history)?;
+            let dest = history.join(source.file_name().context("File name is missing")?);
+            fs::rename(&source, &dest)
+                .context("Preserve previous version on its original volume")?;
+            Ok(dest)
+        }
+        Err(error) => Err(error).context("Preserve previous version for recovery"),
+    }
+}
+
+pub fn install_download(root: &Path, staged: &Path, target: &Path) -> Result<()> {
+    match fs::rename(staged, target) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
+            // Only a completed, verified blob crosses volumes. Copy into an
+            // excluded staging file on the destination volume before publishing.
+            let private = root.join(PRIVATE_DIR);
+            crate::store::ensure_state_directory(&private)?;
+            let mut snapshot = open_snapshot(staged)?;
+            let mut adjacent = tempfile::NamedTempFile::new_in(private.join("transfers"))?;
+            std::io::copy(&mut snapshot, adjacent.as_file_mut())?;
+            adjacent.as_file().sync_all()?;
+            adjacent
+                .persist_noclobber(target)
+                .context("Atomically install cross-volume download")?;
+            drop(snapshot);
+            fs::remove_file(staged)?;
+            Ok(())
+        }
+        Err(error) => Err(error).context("Atomically install download"),
+    }
 }
 
 pub fn conflict_path(root: &Path, path: &str) -> Result<String> {

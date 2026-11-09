@@ -1,5 +1,7 @@
 # Selecting folders
 
+Windows can optionally use [Files On-Demand](cloud-files.md). Use dedicated NTFS roots outside other cloud providers. Before stopping a cloud folder, pin its entire contents in Explorer and wait for completion; FileNode unregisters it while retaining local and remote files.
+
 One profile connects one account and up to 64 local folders. In **Sync and backup**, select **Add folder**. The selection is saved immediately and the generated server path appears below it. The list remains editable while syncing. Changes safely stop the previous worker before a replacement can access the same folder databases. Sync continues automatically; adding a folder also starts it when the account is signed in. Otherwise, **Sign in** starts it. The tray menu also provides **Start syncing**.
 
 New selections use their final folder name at the server root:

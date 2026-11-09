@@ -31,6 +31,51 @@ pub struct SyncGroup {
     folders: Vec<FolderState>,
 }
 
+/// Account transport lifetime is independent of per-folder retry deadlines.
+/// HTTP reconnects failed sockets itself; a local folder failure must never
+/// discard a healthy pool or restart discovery and the push subscription.
+pub struct SyncSession<R> {
+    remote: Option<R>,
+    verified: bool,
+}
+impl<R: Remote> Default for SyncSession<R> {
+    fn default() -> Self {
+        Self {
+            remote: None,
+            verified: false,
+        }
+    }
+}
+impl<R: Remote> SyncSession<R> {
+    pub fn verified(&self) -> bool {
+        self.verified
+    }
+    pub fn connection(&self) -> Option<&R> {
+        self.remote.as_ref()
+    }
+    pub fn reset(&mut self) {
+        self.remote = None;
+    }
+    pub fn poll(
+        &mut self,
+        group: &mut SyncGroup,
+        connect: impl FnOnce() -> Result<R>,
+        cancel: &AtomicBool,
+        log: &mut dyn FnMut(Message),
+    ) -> Result<Option<Report>> {
+        if self.verified && !group.ready() {
+            return Ok(None);
+        }
+        if self.remote.is_none() {
+            self.remote = Some(connect()?);
+            self.verified = true;
+        }
+        group
+            .poll(self.remote.as_mut().unwrap(), cancel, log)
+            .map(Some)
+    }
+}
+
 impl SyncGroup {
     pub fn new(config: &Config) -> Result<Self> {
         config.validate_account()?;

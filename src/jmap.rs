@@ -22,6 +22,9 @@ use std::{
 use url::Url;
 
 pub trait Remote {
+    fn downloader(&self) -> Option<Arc<dyn Downloader>> {
+        None
+    }
     fn uploader(&self) -> Option<Arc<dyn Uploader>> {
         None
     }
@@ -55,6 +58,19 @@ pub trait Remote {
 pub trait Uploader: Send + Sync {
     fn send_blob(&self, path: &Path, size: u64) -> Result<String>;
     fn policy(&self) -> Arc<crate::runtime::Policy>;
+}
+
+/// Immutable blob range transport used by the Windows Cloud Files callbacks.
+/// The consumer may fail (including cancellation); callers must stop immediately.
+pub trait Downloader: Send + Sync {
+    fn read_range(
+        &self,
+        node: &Node,
+        offset: u64,
+        length: u64,
+        cancel: &AtomicBool,
+        consume: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()>;
 }
 
 #[derive(Clone, Copy, Default, serde::Serialize)]
@@ -279,6 +295,15 @@ impl Jmap {
     }
     pub fn take_remote_change(&self) -> bool {
         self.push.as_ref().is_some_and(|push| push.take_change())
+    }
+
+    fn transfer_transport(&self) -> Self {
+        let mut transport = self.clone();
+        // Share the HTTP pool and token session, but never keep an obsolete
+        // account push worker alive through a file-transfer callback.
+        transport.push = None;
+        transport.push_url = None;
+        transport
     }
 
     fn transfer_timeout(&self, size: u64, upload: bool) -> Duration {
@@ -636,9 +661,106 @@ impl Jmap {
     }
 }
 
+impl Downloader for Jmap {
+    fn read_range(
+        &self,
+        node: &Node,
+        offset: u64,
+        length: u64,
+        cancel: &AtomicBool,
+        consume: &mut dyn FnMut(&[u8]) -> Result<()>,
+    ) -> Result<()> {
+        let end = offset
+            .checked_add(length)
+            .context("Invalid cloud file range")?;
+        if end > node.size || node.size > self.max_bytes {
+            bail!("Cloud file range exceeds the file limit");
+        }
+        self.policy.check()?;
+        if cancel.load(Ordering::Relaxed) {
+            bail!("Cloud file request cancelled");
+        }
+        if length == 0 {
+            return Ok(());
+        }
+        let blob = node.blob_id.as_deref().context("File has no blob")?;
+        let request = self.authentication.apply(
+            self.client
+                .get(self.expand(&self.download_url, Some((blob, &node.name)))?)
+                .header(header::ACCEPT_ENCODING, "identity")
+                .header(header::RANGE, format!("bytes={offset}-{}", end - 1)),
+        )?;
+        let mut response = request
+            .timeout(self.transfer_timeout(node.size, false))
+            .send()?;
+        self.authentication.observe(response.status())?;
+        if response
+            .headers()
+            .get(header::CONTENT_ENCODING)
+            .is_some_and(|encoding| encoding != "identity")
+        {
+            bail!("Encoded cloud file responses cannot be mapped to byte ranges");
+        }
+        let mut discard = 0;
+        if response.status() == StatusCode::PARTIAL_CONTENT {
+            let expected = format!("bytes {offset}-{}/{}", end - 1, node.size);
+            if response
+                .headers()
+                .get(header::CONTENT_RANGE)
+                .and_then(|v| v.to_str().ok())
+                != Some(expected.as_str())
+            {
+                bail!("Server returned a different cloud file range");
+            }
+            if response.content_length().is_some_and(|size| size != length) {
+                bail!("Invalid range response size");
+            }
+        } else if response.status() == StatusCode::OK {
+            // A compliant JMAP blob server need not implement byte ranges. Keep
+            // memory bounded, account for the skipped bytes, and never expose
+            // a prefix at the wrong offset.
+            if response
+                .content_length()
+                .is_some_and(|size| size != node.size)
+            {
+                bail!("Blob size changed");
+            }
+            discard = offset;
+        } else {
+            bail!("Cloud file download HTTP {}", response.status());
+        }
+        let mut budget = crate::runtime::Budget::new(self.policy.clone(), false);
+        let mut buffer = [0u8; 65536];
+        let mut remaining = length;
+        while discard > 0 || remaining > 0 {
+            self.policy.check()?;
+            if cancel.load(Ordering::Relaxed) {
+                bail!("Cloud file request cancelled");
+            }
+            let wanted =
+                if discard > 0 { discard } else { remaining }.min(buffer.len() as u64) as usize;
+            let count = response.read(&mut buffer[..wanted])?;
+            if count == 0 {
+                bail!("Incomplete cloud file download; retry when connected");
+            }
+            budget.reserve(count)?;
+            if discard > 0 {
+                discard -= count as u64;
+            } else {
+                consume(&buffer[..count])?;
+                remaining -= count as u64;
+            }
+        }
+        Ok(())
+    }
+}
+
 impl Remote for Jmap {
+    fn downloader(&self) -> Option<Arc<dyn Downloader>> {
+        Some(Arc::new(self.transfer_transport()))
+    }
     fn uploader(&self) -> Option<Arc<dyn Uploader>> {
-        Some(Arc::new(self.clone()))
+        Some(Arc::new(self.transfer_transport()))
     }
     fn upload_limits(&self) -> UploadLimits {
         self.limits
@@ -1065,6 +1187,70 @@ mod tests {
     }
 
     #[test]
+    fn api_and_transfer_clones_reuse_one_http_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = format!("http://{}", listener.local_addr().unwrap());
+        let worker = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = std::io::BufReader::new(socket.try_clone().unwrap());
+            for index in 0..21 {
+                let mut line = String::new();
+                assert!(
+                    reader.read_line(&mut line).unwrap() > 0,
+                    "HTTP pool was discarded at request {index}"
+                );
+                let mut length = 0;
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap();
+                        }
+                    }
+                }
+                let mut body = vec![0; length];
+                reader.read_exact(&mut body).unwrap();
+                let body = if index == 0 { session(true) } else {
+                    json!({"methodResponses":[["FileNode/get",{"state":"1","list":[],"notFound":[]},"drive"]]})
+                }.to_string();
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            }
+        });
+        let config = Config {
+            server: address,
+            username: "test@example.org".into(),
+            ..Default::default()
+        };
+        let remote = Jmap::connect_inner(
+            &config,
+            "fixture".into(),
+            Arc::new(AtomicBool::new(false)),
+            true,
+        )
+        .unwrap();
+        let transport = remote.transfer_transport();
+        assert!(transport.push.is_none());
+        assert!(transport.push_url.is_none());
+        for _ in 0..10 {
+            assert_eq!(remote.current_state().unwrap(), "1");
+            assert_eq!(transport.current_state().unwrap(), "1");
+        }
+        worker.join().unwrap();
+    }
+
+    #[test]
     fn advertised_upload_limits_are_discovered_and_enforced_before_sending() {
         let (address, worker) = server(1, |_, _| {
             let mut value = session(true);
@@ -1094,6 +1280,110 @@ mod tests {
         lowered.parallel_uploads = 1;
         assert_eq!(remote.upload_limits().effective_size(&lowered), 2);
         assert_eq!(remote.upload_limits().effective_parallelism(&lowered), 1);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn cloud_ranges_validate_offsets_and_support_servers_without_range_requests() {
+        for partial in [true, false] {
+            let (address, worker) = server(2, move |index, request| {
+                if index == 0 {
+                    return response("200 OK", "", &session(true).to_string());
+                }
+                assert!(request.headers.contains("range: bytes=8-13\r\n"));
+                assert!(request.headers.contains("accept-encoding: identity\r\n"));
+                if partial {
+                    response(
+                        "206 Partial Content",
+                        "Content-Range: bytes 8-13/20\r\n",
+                        "89abcd",
+                    )
+                } else {
+                    response("200 OK", "", "0123456789abcdefghij")
+                }
+            });
+            let config = Config {
+                server: address,
+                username: "user".into(),
+                ..Config::default()
+            };
+            let remote = Jmap::connect_inner(
+                &config,
+                "test".into(),
+                Arc::new(AtomicBool::new(false)),
+                true,
+            )
+            .unwrap();
+            let node = Node {
+                id: "node".into(),
+                name: "range.bin".into(),
+                parent_id: None,
+                blob_id: Some("blob".into()),
+                kind: Kind::File,
+                size: 20,
+                role: None,
+            };
+            let mut bytes = Vec::new();
+            remote
+                .read_range(&node, 8, 6, &AtomicBool::new(false), &mut |part| {
+                    bytes.extend_from_slice(part);
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(bytes, b"89abcd");
+            // Cancellation and invalid ranges fail before any further request.
+            assert!(remote
+                .read_range(&node, 0, 1, &AtomicBool::new(true), &mut |_| panic!(
+                    "cancelled data leaked"
+                ))
+                .is_err());
+            assert!(remote
+                .read_range(&node, 19, 2, &AtomicBool::new(false), &mut |_| panic!(
+                    "invalid range leaked"
+                ))
+                .is_err());
+            worker.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn cloud_ranges_reject_mismatched_server_content_before_exposing_bytes() {
+        let (address, worker) = server(2, |index, _| {
+            if index == 0 {
+                return response("200 OK", "", &session(true).to_string());
+            }
+            response(
+                "206 Partial Content",
+                "Content-Range: bytes 0-5/20\r\n",
+                "012345",
+            )
+        });
+        let config = Config {
+            server: address,
+            username: "user".into(),
+            ..Config::default()
+        };
+        let remote = Jmap::connect_inner(
+            &config,
+            "test".into(),
+            Arc::new(AtomicBool::new(false)),
+            true,
+        )
+        .unwrap();
+        let node = Node {
+            id: "node".into(),
+            name: "range.bin".into(),
+            parent_id: None,
+            blob_id: Some("blob".into()),
+            kind: Kind::File,
+            size: 20,
+            role: None,
+        };
+        assert!(remote
+            .read_range(&node, 8, 6, &AtomicBool::new(false), &mut |_| panic!(
+                "wrong bytes exposed"
+            ))
+            .is_err());
         worker.join().unwrap();
     }
 
