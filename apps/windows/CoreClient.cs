@@ -204,7 +204,7 @@ internal sealed class CoreClient : IAsyncDisposable
     }
     public async Task Send(string command, JsonObject? data = null)
     {
-        if (process is null || process.HasExited || stopping) return;
+        if (stopping || process is null || process.HasExited) return;
         data ??= new(); data["command"] = command;
         await writer.WaitAsync().ConfigureAwait(false);
         try { await process.StandardInput.WriteLineAsync(data.ToJsonString()).ConfigureAwait(false); await process.StandardInput.FlushAsync().ConfigureAwait(false); }
