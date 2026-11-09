@@ -1185,7 +1185,7 @@ unsafe fn fetch_inner(info: &CF_CALLBACK_INFO, params: &CF_CALLBACK_PARAMETERS) 
                     let mut offset = start;
                     let mut pending = Vec::with_capacity(65536);
                     let downloader = worker.downloader.read().unwrap_or_else(|e| e.into_inner()).clone();
-                    downloader.read_range(
+                    let download = downloader.read_range(
                         &identity.node,
                         start,
                         end - start,
@@ -1224,7 +1224,16 @@ unsafe fn fetch_inner(info: &CF_CALLBACK_INFO, params: &CF_CALLBACK_PARAMETERS) 
                             }
                             Ok(())
                         },
-                    )?;
+                    );
+                    // A CANCEL_FETCH_DATA callback says these bytes are no
+                    // longer needed. Windows has already completed that I/O.
+                    // Failing the range now would also fail a newer overlapping
+                    // reader that arrived while the old worker was stopping.
+                    if cancel.load(Ordering::SeqCst) || worker.stopping.load(Ordering::SeqCst) {
+                        activity.superseded();
+                        return Ok(());
+                    }
+                    download?;
                     if !pending.is_empty() || offset != end {
                         bail!("Incomplete cloud file range");
                     }
@@ -1233,10 +1242,11 @@ unsafe fn fetch_inner(info: &CF_CALLBACK_INFO, params: &CF_CALLBACK_PARAMETERS) 
                 }));
             #[cfg(test)]
             if let Ok(Err(error)) = &result { eprintln!("Cloud worker completed={completed}: {error:#}"); }
-            if !matches!(result, Ok(Ok(()))) {
-                request.fail_remaining(completed, if cancel.load(Ordering::SeqCst) {
-                    STATUS_CANCELLED
-                } else if matches!(&result, Ok(Err(error)) if error.downcast_ref::<crate::auth::SignInRequired>().is_some()) {
+            if !matches!(result, Ok(Ok(())))
+                && !cancel.load(Ordering::SeqCst)
+                && !worker.stopping.load(Ordering::SeqCst)
+            {
+                request.fail_remaining(completed, if matches!(&result, Ok(Err(error)) if error.downcast_ref::<crate::auth::SignInRequired>().is_some()) {
                     STATUS_CLOUD_FILE_AUTHENTICATION_FAILED
                 } else {
                     STATUS_CLOUD_FILE_NETWORK_UNAVAILABLE

@@ -241,6 +241,15 @@ impl FileActivity {
             transfer.emit(state);
         }
     }
+    /// Stop an obsolete request without overwriting a newer row for this file.
+    #[cfg(any(windows, test))]
+    pub(crate) fn superseded(&mut self) {
+        self.finished = true;
+        if let Some(transfer) = &self.transfer {
+            let _lock = transfer.last.lock().unwrap_or_else(|e| e.into_inner());
+            transfer.closed.store(true, Ordering::Relaxed);
+        }
+    }
 }
 impl Drop for FileActivity {
     fn drop(&mut self) {
@@ -262,6 +271,26 @@ impl Drop for FileActivity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancelled_old_request_does_not_overwrite_a_newer_file_result() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let _observer = Scope::observe(move |event| sink.lock().unwrap().push(event));
+        let mut old = FileActivity::begin("a.txt", "download", 100);
+        let stale_progress = Progress::current();
+        {
+            let mut newer = FileActivity::begin("a.txt", "download", 100);
+            newer.finish("synced");
+        }
+        let count = events.lock().unwrap().len();
+        old.superseded();
+        stale_progress.set(30);
+        drop(old);
+        let events = events.lock().unwrap();
+        assert_eq!(events.len(), count);
+        assert!(matches!(events.last(), Some(Event::File { state, .. }) if state == "synced"));
+    }
+
     #[test]
     fn full_payload_is_not_success_until_commit_and_failure_retries_the_same_identity() {
         let events = Arc::new(Mutex::new(Vec::new()));
