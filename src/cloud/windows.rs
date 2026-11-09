@@ -485,8 +485,9 @@ pub fn detach(config: &Config) -> Result<()> {
                 }
             }
             let file = Protected::open(entry.path(), true)?;
+            let lease = Lease::new(&file)?;
             unsafe {
-                CfRevertPlaceholder(file.raw(), CF_REVERT_FLAG_NONE, None)?;
+                CfRevertPlaceholder(lease.raw(), CF_REVERT_FLAG_NONE, None)?;
             }
         }
     }
@@ -559,9 +560,6 @@ impl Protected {
                 .context("Acquire cloud file oplock")?
         }))
     }
-    fn raw(&self) -> HANDLE {
-        self.0
-    }
 }
 impl Drop for Protected {
     fn drop(&mut self) {
@@ -571,20 +569,26 @@ impl Drop for Protected {
     }
 }
 
-struct Lease(HANDLE);
-impl Lease {
-    fn new(file: &Protected) -> Result<Self> {
+struct Lease<'a>(&'a Protected);
+impl<'a> Lease<'a> {
+    fn new(file: &'a Protected) -> Result<Self> {
         if !unsafe { CfReferenceProtectedHandle(file.0) } {
             bail!("File changed while acquiring its cloud snapshot");
         }
-        Ok(Self(file.0))
+        Ok(Self(file))
+    }
+    fn raw(&self) -> HANDLE {
+        // A live reference keeps this native handle valid even after another
+        // opener requests an oplock break. The opaque protected handle may
+        // already reject new operations at that point.
+        unsafe { CfGetWin32HandleFromProtectedHandle(self.0 .0) }
     }
     fn verify(&self, expected: &LocalEntry) -> Result<()> {
         if expected.kind == Kind::Directory || expected.hash.starts_with("cloud:") {
             return Ok(());
         }
         use sha2::{Digest, Sha256};
-        let handle = unsafe { CfGetWin32HandleFromProtectedHandle(self.0) };
+        let handle = self.raw();
         let mut hash = Sha256::new();
         let mut offset = 0u64;
         let mut buffer = [0u8; 65536];
@@ -650,10 +654,10 @@ impl Lease {
         Ok(())
     }
 }
-impl Drop for Lease {
+impl Drop for Lease<'_> {
     fn drop(&mut self) {
         unsafe {
-            CfReleaseProtectedHandle(self.0);
+            CfReleaseProtectedHandle(self.0 .0);
         }
     }
 }
@@ -813,7 +817,7 @@ impl Provider {
                     // platform to hydrate an otherwise online-only file.
                     unsafe {
                         CfSetInSyncState(
-                            file.raw(),
+                            lease.raw(),
                             CF_IN_SYNC_STATE_IN_SYNC,
                             CF_SET_IN_SYNC_FLAG_NONE,
                             None,
@@ -828,7 +832,7 @@ impl Provider {
                 }
                 unsafe {
                     CfUpdatePlaceholder(
-                        file.raw(),
+                        lease.raw(),
                         None,
                         Some(bytes.as_ptr().cast()),
                         bytes.len() as u32,
@@ -844,7 +848,7 @@ impl Provider {
                 }
                 unsafe {
                     CfConvertToPlaceholder(
-                        file.raw(),
+                        lease.raw(),
                         Some(bytes.as_ptr().cast()),
                         bytes.len() as u32,
                         CF_CONVERT_FLAG_MARK_IN_SYNC,
@@ -926,8 +930,9 @@ impl Provider {
                 if info.pin == CF_PIN_STATE_PINNED && info.on_disk < info.identity.node.size as i64
                 {
                     let file = Protected::open(entry.path(), false)?;
+                    let lease = Lease::new(&file)?;
                     unsafe {
-                        CfHydratePlaceholder(file.raw(), 0, CF_EOF, CF_HYDRATE_FLAG_NONE, None)?;
+                        CfHydratePlaceholder(lease.raw(), 0, CF_EOF, CF_HYDRATE_FLAG_NONE, None)?;
                     }
                 } else if info.pin == CF_PIN_STATE_UNPINNED && info.on_disk > 0 {
                     let file = metadata_exclusive(entry.path())?;
@@ -1050,6 +1055,11 @@ impl Request {
         Ok(())
     }
     fn fail(&self, status: NTSTATUS) {
+        #[cfg(test)]
+        eprintln!(
+            "Cloud test request rejected: offset={} length={} status={status:?}",
+            self.offset, self.length
+        );
         let _ = self.transfer(self.offset, self.length, std::ptr::null(), status);
     }
     fn fail_remaining(&self, completed: i64, status: NTSTATUS) {
@@ -1059,6 +1069,25 @@ impl Request {
             let _ = self.transfer(offset, end - offset, std::ptr::null(), status);
         }
     }
+}
+
+// The filter may round the required range beyond the logical EOF. Never
+// forward padding or the CF_EOF sentinel to the HTTP blob transport.
+fn normalize_range(request: &mut Request, size: u64) -> Result<()> {
+    if size > i64::MAX as u64
+        || request.offset < 0
+        || request.offset as u64 > size
+        || request.length < CF_EOF
+    {
+        bail!("Invalid Cloud Files request range");
+    }
+    let remaining = size as i64 - request.offset;
+    request.length = if request.length == CF_EOF {
+        remaining
+    } else {
+        request.length.min(remaining)
+    };
+    Ok(())
 }
 
 unsafe extern "system" fn fetch(
@@ -1098,20 +1127,8 @@ unsafe fn fetch_inner(info: &CF_CALLBACK_INFO, params: &CF_CALLBACK_PARAMETERS) 
         request.fail(STATUS_CLOUD_FILE_UNSUCCESSFUL);
         return;
     };
-    if request.length == CF_EOF
-        && request.offset >= 0
-        && request.offset as u64 <= identity.node.size
-    {
-        request.length = (identity.node.size - request.offset as u64) as i64;
-    }
-    if identity.root != state.key
-        || request.offset < 0
-        || request.length < 0
-        || (request.offset as u64)
-            .checked_add(request.length as u64)
-            .is_none_or(|end| end > identity.node.size)
-    {
-        request.fail(STATUS_CLOUD_FILE_UNSUCCESSFUL);
+    if identity.root != state.key || normalize_range(&mut request, identity.node.size).is_err() {
+        request.fail(STATUS_CLOUD_FILE_INVALID_REQUEST);
         return;
     }
     let key = (

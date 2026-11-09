@@ -382,9 +382,10 @@ fn native_cloud_sync_round_trip_and_detach() -> Result<()> {
     // Explorer pins the root and descendants. The provider hydrates them.
     {
         let file = Protected::open(&root, false)?;
+        let lease = Lease::new(&file)?;
         unsafe {
             CfSetPinState(
-                file.raw(),
+                lease.raw(),
                 CF_PIN_STATE_PINNED,
                 CF_SET_PIN_FLAG_RECURSE,
                 None,
@@ -431,9 +432,10 @@ fn native_cloud_sync_round_trip_and_detach() -> Result<()> {
     );
     {
         let file = Protected::open(&root, false)?;
+        let lease = Lease::new(&file)?;
         unsafe {
             CfSetPinState(
-                file.raw(),
+                lease.raw(),
                 CF_PIN_STATE_UNSPECIFIED,
                 CF_SET_PIN_FLAG_RECURSE,
                 None,
@@ -514,7 +516,10 @@ fn native_placeholder_hydration_and_eviction() -> Result<()> {
         0,
         "metadata access hydrated a placeholder"
     );
-    assert_eq!(std::fs::read(&target)?, bytes.data);
+    assert_eq!(
+        std::fs::read(&target).context("Read hydrated payload")?,
+        bytes.data
+    );
     assert!(bytes.requests.load(Ordering::SeqCst) > 0);
     assert_eq!(
         committed_entry(&target)?,
@@ -523,14 +528,15 @@ fn native_placeholder_hydration_and_eviction() -> Result<()> {
     );
     {
         let file = Protected::open(&target, true)?;
+        let lease = Lease::new(&file)?;
         unsafe {
             CfSetPinState(
-                file.raw(),
+                lease.raw(),
                 CF_PIN_STATE_UNPINNED,
                 CF_SET_PIN_FLAG_NONE,
                 None,
             )?;
-            CfDehydratePlaceholder(file.raw(), 0, CF_EOF, CF_DEHYDRATE_FLAG_NONE, None)?;
+            CfDehydratePlaceholder(lease.raw(), 0, CF_EOF, CF_DEHYDRATE_FLAG_NONE, None)?;
         }
     }
     assert_eq!(committed_entry(&target)?, Some(local));
@@ -543,7 +549,10 @@ fn native_placeholder_hydration_and_eviction() -> Result<()> {
         }
         assert!(placeholder_handle(&file)?.unwrap().on_disk > 0);
     }
-    assert_eq!(std::fs::read(&target)?, bytes.data);
+    assert_eq!(
+        std::fs::read(&target).context("Read hydrated payload")?,
+        bytes.data
+    );
     // Fail a separate request after delivering aligned pages. Retrying the
     // same immutable blob must request only its unhydrated remainder.
     let interrupted_node = Node {
@@ -582,10 +591,12 @@ fn native_placeholder_hydration_and_eviction() -> Result<()> {
     std::fs::write(&target, b"local changes")?;
     assert!(committed_entry(&target)?.is_none());
     let file = Protected::open(&target, true)?;
-    assert!(
-        unsafe { CfDehydratePlaceholder(file.raw(), 0, CF_EOF, CF_DEHYDRATE_FLAG_NONE, None) }
-            .is_err()
-    );
+    let lease = Lease::new(&file)?;
+    assert!(unsafe {
+        CfDehydratePlaceholder(lease.raw(), 0, CF_EOF, CF_DEHYDRATE_FLAG_NONE, None)
+    }
+    .is_err());
+    drop(lease);
     drop(file);
     assert_eq!(std::fs::read(&target)?, b"local changes");
     // Convert a regular uploaded file only when its bytes still match the
@@ -638,5 +649,101 @@ fn native_placeholder_hydration_and_eviction() -> Result<()> {
         "a partial root must not be detached"
     );
     drop(provider);
+    Ok(())
+}
+
+#[test]
+fn requested_ranges_are_clipped_at_the_logical_end_of_file() {
+    let mut request = Request {
+        connection: CF_CONNECTION_KEY::default(),
+        transfer: 0,
+        request: 0,
+        offset: 147456,
+        length: 4096,
+    };
+    normalize_range(&mut request, 150123).unwrap();
+    assert_eq!(request.length, 2667);
+    request.offset = 8192;
+    request.length = CF_EOF;
+    normalize_range(&mut request, 150123).unwrap();
+    assert_eq!(request.length, 141931);
+    request.length = i64::MAX;
+    normalize_range(&mut request, 150123).unwrap();
+    assert_eq!(request.length, 141931);
+    request.offset = -1;
+    assert!(normalize_range(&mut request, 150123).is_err());
+    request.offset = 150124;
+    assert!(normalize_range(&mut request, 150123).is_err());
+    request.offset = 0;
+    request.length = -2;
+    assert!(normalize_range(&mut request, 150123).is_err());
+}
+
+#[test]
+#[ignore = "Exercises a real Windows oplock break during placeholder conversion"]
+fn protected_snapshot_remains_valid_during_a_conflicting_open() -> Result<()> {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts/cloud-tests");
+    std::fs::create_dir_all(&fixtures)?;
+    let temp = tempfile::tempdir_in(fixtures)?;
+    let root = temp.path().join("Oplock");
+    std::fs::create_dir(&root)?;
+    let config = Config {
+        local_folder: root.clone(),
+        username: "test@example.org".into(),
+        files_on_demand: true,
+        ..Default::default()
+    };
+    let _cleanup = Cleanup(config.clone());
+    let bytes = Arc::new(MemoryBytes::default());
+    let _provider = Provider::connect(&config, bytes)?;
+    let path = root.join("uploaded.txt");
+    std::fs::write(&path, b"committed contents")?;
+    let local = crate::filesystem::hash_file(&path, u64::MAX)?;
+    let node = Node {
+        id: "uploaded".into(),
+        name: "uploaded.txt".into(),
+        parent_id: None,
+        blob_id: Some("immutable".into()),
+        role: None,
+        kind: Kind::File,
+        size: local.size,
+    };
+    let identity =
+        Identity::new(&super::super::root_key(&config)?, &node, Some(&local)).encode()?;
+    let file = Protected::open(&path, true)?;
+    let lease = Lease::new(&file)?;
+    let opener_path = path.clone();
+    let opener = std::thread::spawn(move || OpenOptions::new().write(true).open(opener_path));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if !unsafe { CfReferenceProtectedHandle(file.0) } {
+            break;
+        }
+        unsafe {
+            CfReleaseProtectedHandle(file.0);
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "conflicting open did not request an oplock break"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    lease.verify(&local)?;
+    unsafe {
+        CfConvertToPlaceholder(
+            lease.raw(),
+            Some(identity.as_ptr().cast()),
+            identity.len() as u32,
+            CF_CONVERT_FLAG_MARK_IN_SYNC,
+            None,
+            None,
+        )
+        .context("Convert while oplock break is pending")?;
+    }
+    drop(lease);
+    drop(file);
+    drop(opener.join().unwrap()?);
+    assert_eq!(committed_entry(&path)?, Some(local));
+    assert_eq!(std::fs::read(&path)?, b"committed contents");
     Ok(())
 }
