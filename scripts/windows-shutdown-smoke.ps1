@@ -16,13 +16,36 @@ if ($Installer) {
 if (!('FileNodeShutdownMessages' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
+using System.Text;
 using System.Runtime.InteropServices;
 public static class FileNodeShutdownMessages {
+    [StructLayout(LayoutKind.Sequential)] private struct UniqueProcess { public uint Id; public System.Runtime.InteropServices.ComTypes.FILETIME Start; }
     [DllImport("user32.dll", SetLastError=true)] private static extern IntPtr SendMessageTimeout(IntPtr hwnd,uint message,UIntPtr wparam,IntPtr lparam,uint flags,uint timeout,out UIntPtr result);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint process);
-    public static ulong Send(long hwnd,int owner,uint message,bool end) {
+    [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr hwnd,int mode);
+    [DllImport("rstrtmgr.dll",CharSet=CharSet.Unicode)] private static extern int RmStartSession(out uint session,uint flags,StringBuilder key);
+    [DllImport("rstrtmgr.dll",CharSet=CharSet.Unicode)] private static extern int RmRegisterResources(uint session,uint files,string[] names,uint processes,UniqueProcess[] apps,uint services,string[] serviceNames);
+    [DllImport("rstrtmgr.dll")] private static extern int RmShutdown(uint session,uint flags,IntPtr callback);
+    [DllImport("rstrtmgr.dll")] private static extern int RmEndSession(uint session);
+    private static void Verify(long hwnd,int owner) {
         uint actual; GetWindowThreadProcessId(new IntPtr(hwnd),out actual);
-        if(actual != (uint)owner) throw new InvalidOperationException("Refusing to message a window outside the isolated test process");
+        if(actual != (uint)owner) throw new InvalidOperationException("Refusing to control a window outside the isolated test process");
+    }
+    public static void Hide(long hwnd,int owner) { Verify(hwnd,owner); ShowWindow(new IntPtr(hwnd),0); }
+    public static void RestartManager(int owner,long started) {
+        uint session;
+        var result=RmStartSession(out session,0,new StringBuilder(33));
+        if(result!=0) throw new System.ComponentModel.Win32Exception(result);
+        try {
+            var app=new UniqueProcess {Id=(uint)owner,Start=new System.Runtime.InteropServices.ComTypes.FILETIME {dwLowDateTime=unchecked((int)started),dwHighDateTime=(int)(started>>32)}};
+            result=RmRegisterResources(session,0,null,1,new[]{app},0,null);
+            if(result!=0) throw new System.ComponentModel.Win32Exception(result);
+            result=RmShutdown(session,0,IntPtr.Zero);
+            if(result!=0) throw new System.ComponentModel.Win32Exception(result);
+        } finally { RmEndSession(session); }
+    }
+    public static ulong Send(long hwnd,int owner,uint message,bool end) {
+        Verify(hwnd,owner);
         UIntPtr result;
         if(SendMessageTimeout(new IntPtr(hwnd),message,new UIntPtr(end ? 1u : 0u),new IntPtr(1),2,12000,out result)==IntPtr.Zero)
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
@@ -31,7 +54,7 @@ public static class FileNodeShutdownMessages {
 }
 '@
 }
-$driveCases = @('status', 'settings')
+$driveCases = @('status', 'settings', 'restart-manager')
 if ($Installer) { $driveCases += 'installer' }
 foreach ($driveCase in $driveCases) {
     $driveFixture = Join-Path $driveOutput ($driveCase + '-' + [guid]::NewGuid().ToString('N'))
@@ -59,7 +82,14 @@ foreach ($driveCase in $driveCases) {
             Start-Sleep -Milliseconds 100
             if ($driveUi.HasExited) { throw 'Normal close no longer hides the tray application.' }
         }
-        if ($driveCase -eq 'installer') {
+        if ($driveCase -eq 'installer' -or $driveCase -eq 'restart-manager') {
+            # Real background operation: neither top-level window is visible.
+            [FileNodeShutdownMessages]::Hide($driveState.status, $driveUi.Id)
+            [FileNodeShutdownMessages]::Hide($driveState.settings, $driveUi.Id)
+        }
+        if ($driveCase -eq 'restart-manager') {
+            [FileNodeShutdownMessages]::RestartManager($driveUi.Id, $driveUi.StartTime.ToUniversalTime().ToFileTimeUtc())
+        } elseif ($driveCase -eq 'installer') {
             # Keep the fixture running while the real installer replaces its locked payload.
             $driveInstallRoot = Split-Path -Parent $driveExecutable
             $driveSetup = Start-Process -FilePath $Installer -ArgumentList @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CLOSEAPPLICATIONS', ('/DIR="' + $driveInstallRoot + '"'), ('/LOG="' + (Join-Path $driveFixture 'upgrade.log') + '"')) -WindowStyle Hidden -PassThru
