@@ -15,7 +15,11 @@ pub struct Store {
 
 impl Store {
     pub fn open(config: &Config) -> Result<Self> {
-        let folder = config.local_folder.join(PRIVATE_DIR);
+        #[cfg(windows)]
+        if !config.files_on_demand && crate::cloud::is_registered(config)? {
+            bail!("This folder is still registered for Files On-Demand. Disable it in FileNode first, after making every file available locally.");
+        }
+        let folder = config.private_directory()?;
         if let Ok(meta) = fs::symlink_metadata(&folder) {
             if !meta.is_dir() || meta.file_type().is_symlink() {
                 bail!("Unsafe state directory");
@@ -42,12 +46,53 @@ impl Store {
             .open(folder.join("lock"))?;
         lock.try_lock_exclusive()
             .context("Another FileNode process is using this folder")?;
+        let detached = if config.files_on_demand && folder.join("state.sqlite").exists() {
+            let previous = Connection::open(folder.join("state.sqlite"))?;
+            previous
+                .query_row(
+                    "SELECT value FROM meta WHERE key='cloud_detached'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+                .as_deref()
+                == Some("true")
+        } else {
+            false
+        };
+        if config.files_on_demand && (!folder.join("state.sqlite").exists() || detached) {
+            // Copy a consistent database under the legacy root's exclusive
+            // lock. Keep the original database/history intact for recovery.
+            let legacy = config.local_folder.join(PRIVATE_DIR);
+            if legacy.join("state.sqlite").exists() {
+                ensure_state_directory(&legacy)?;
+                let legacy_lock = OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(legacy.join("lock"))?;
+                legacy_lock
+                    .try_lock_exclusive()
+                    .context("Stop the previous sync engine before enabling Files On-Demand")?;
+                let source = Connection::open(legacy.join("state.sqlite"))?;
+                let staged = tempfile::NamedTempFile::new_in(&folder)?.into_temp_path();
+                fs::remove_file(&staged)?;
+                source.execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
+                if folder.join("state.sqlite").exists() {
+                    let previous = Connection::open(folder.join("state.sqlite"))?;
+                    previous.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+                }
+                fs::rename(&staged, folder.join("state.sqlite"))?;
+            }
+        }
         let db = Connection::open(folder.join("state.sqlite"))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS baseline (path TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS journal (id TEXT PRIMARY KEY, action TEXT NOT NULL, status TEXT NOT NULL, timestamp TEXT NOT NULL);")?;
         let store = Self { db, _lock: lock };
+        if config.files_on_demand {
+            store.set_meta("cloud_detached", &false)?;
+        }
         let identity = format!(
             "{}|{}|{}|{}|{}",
             config.server.trim_end_matches('/'),
@@ -149,8 +194,15 @@ impl Store {
 }
 
 pub fn ensure_private_path(root: &Path) -> Result<()> {
-    for name in ["history", "transfers"] {
-        let path = root.join(PRIVATE_DIR).join(name);
+    ensure_state_directory(&root.join(PRIVATE_DIR))
+}
+
+pub fn ensure_state_directory(folder: &Path) -> Result<()> {
+    for path in [
+        folder.to_path_buf(),
+        folder.join("history"),
+        folder.join("transfers"),
+    ] {
         if let Ok(m) = fs::symlink_metadata(&path) {
             if m.file_type().is_symlink() || !m.is_dir() {
                 bail!("Unsafe internal directory");

@@ -72,7 +72,7 @@
     </section>
 
     <section class="shell section-space development" aria-labelledby="development-title">
-      <div class="section-heading"><p class="eyebrow" data-i18n="devEyebrow">IN DEVELOPMENT · 0.2 PREVIEW</p><h2 id="development-title" data-i18n="devTitle">More folders. Clearer control.</h2><p data-i18n="devIntro">The next preview adds multiple folders, a verified account state and one progress row per file. These features are in development builds; the download buttons above always point to the latest published release.</p></div>
+      <div class="section-heading"><p class="eyebrow" data-i18n="devEyebrow">IN DEVELOPMENT · 0.2 PREVIEW</p><h2 id="development-title" data-i18n="devTitle">More folders. Clearer control.</h2><p data-i18n="devIntro">The Windows development preview adds native Explorer Files On-Demand: see server files immediately and download their contents when needed. These features are in development builds; the download buttons above always point to the latest published release.</p></div>
       <div class="development-grid">
         <article><h3 data-i18n="devRulesTitle">Your folders, your rules.</h3><p data-i18n="devRulesText">Choose which folders to sync, exclude files you don’t need and control upload speed. FileNode shows you when a file needs attention.</p></article>
         <article><h3 data-i18n="devConnectTitle">Ready for changing connections.</h3><p data-i18n="devConnectText">JMAP WebSocket notifications trigger remote checks when supported, with polling as a fallback. Downloads resume after interruptions; uploads restart the affected file from the beginning.</p></article>
@@ -83,7 +83,7 @@
 
     <section class="shell faq section-space"><h2 data-i18n="faqTitle">A few things to know.</h2><div class="faq-list">
       <details><summary data-i18n="faq1Title">What server do I need?</summary><p data-i18n="faq1Text">A server that supports JMAP Files, such as a compatible Stalwart deployment. FileNode is a client for your server, not a hosted storage service. Browser sign-in depends on your server and identity provider configuration; app-password sign-in is also supported.</p></details>
-      <details><summary data-i18n="faq2Title">Are my files available offline?</summary><p data-i18n="faq2Text">Yes. Synced files are complete local files. FileNode currently uses full-file synchronization; it does not provide cloud-only placeholders or block-level delta transfers.</p></details>
+      <details><summary data-i18n="faq2Title">Are my files available offline?</summary><p data-i18n="faq2Text">Full synchronization keeps complete local files. The Windows development preview also offers Files On-Demand: pin files in Explorer to keep them offline, or free up space to leave an online-only placeholder. Linux uses complete local files. Block-level upload deltas are not included.</p></details>
       <details><summary data-i18n="faq3Title">Does it work on GNOME?</summary><p data-i18n="faq3Text">The Linux frontend is Qt, including on GNOME. KDE styling is used when the integration is installed. GNOME may need an AppIndicator extension for the tray icon; without a tray, keep the status window open or minimized.</p></details>
       <details><summary data-i18n="faq4Title">Is the Windows package signed?</summary><p data-i18n="faq4Text">The current MSIX is unsigned and uses a development identity. It needs signing or trust configuration for normal installation. The portable ZIP is a separate download. Microsoft Store publication is not available yet.</p></details>
     </div></section>

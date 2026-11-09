@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use filenode::{
     auth::{self, Authentication},
     config::{AuthMode, Config},
-    group::SyncGroup,
+    group::{SyncGroup, SyncSession},
     jmap::{Jmap, Remote},
     runtime::{Policy, PowerState, Scope},
 };
@@ -45,7 +45,7 @@ impl Output {
             "account" if event["state"] == "signed_in" => logger::event(
                 Level::Information,
                 110,
-                "account_verified",
+                "session.verified()",
                 None,
                 "Authenticated file-account access verified",
             ),
@@ -140,6 +140,12 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     if next.sync_folders != config.sync_folders {
                         next.normalize_folders(&config)?;
                     }
+                    #[cfg(windows)]
+                    let cloud_removed = filenode::cloud::removed_roots(&config, &next)?;
+                    #[cfg(not(windows))]
+                    if next.files_on_demand {
+                        bail!("Files On-Demand requires Windows");
+                    }
                     if next.upload_limit_kib > 1_000_000
                         || next.download_limit_kib > 1_000_000
                         || next.file_settle_seconds > 60
@@ -168,12 +174,26 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     }
                     // Validate and persist before stopping. Join the old worker before
                     // any replacement can touch the same folder databases or files.
+                    // Cloud roots must be detached while their old settings are
+                    // still durable. Never persist a profile that orphans data.
+                    #[cfg(windows)]
+                    if cloud_removed.is_empty() {
+                        next.save(&path)?;
+                    }
+                    #[cfg(not(windows))]
                     next.save(&path)?;
                     if restart {
                         policy.cancel.store(true, Ordering::Relaxed);
                         if let Some(previous) = worker.take() {
                             let _ = previous.join();
                         }
+                    }
+                    #[cfg(windows)]
+                    if !cloud_removed.is_empty() {
+                        for root in &cloud_removed {
+                            filenode::cloud::detach(root)?;
+                        }
+                        next.save(&path)?;
                     }
                     config = next;
                     if account_changed {
@@ -255,8 +275,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                 return;
                             }
                         };
-                        let mut connection = None;
-                        let mut account_verified = false;
+                        let mut session = SyncSession::<Jmap>::default();
                         let mut revision = policy.power.revision.load(Ordering::SeqCst);
                         let mut backoff = 5;
                         let result = (|| -> Result<()> {
@@ -278,7 +297,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                 }
                             };
                             while !policy.cancel.load(Ordering::Relaxed) {
-                                if policy.power_paused() && account_verified {
+                                if policy.power_paused() && session.verified() {
                                     output.send(
                                         json!({"event":"status","key":"status.power_paused"}),
                                     );
@@ -288,7 +307,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                         thread::sleep(Duration::from_millis(250));
                                     }
                                     group.invalidate();
-                                    connection = None;
+                                    session.reset();
                                     if policy.cancel.load(Ordering::Relaxed) {
                                         break;
                                     }
@@ -297,20 +316,17 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                 if current != revision {
                                     revision = current;
                                     group.invalidate();
-                                    connection = None;
+                                    session.reset();
                                 }
                                 if immediate.swap(false, Ordering::Relaxed) {
                                     group.invalidate();
                                 }
-                                if connection.as_ref().is_some_and(Jmap::take_remote_change) {
+                                if session.connection().is_some_and(Jmap::take_remote_change) {
                                     group.refresh_remote();
                                 }
-                                if !group.ready() && connection.is_some() {
-                                    thread::sleep(Duration::from_millis(250));
-                                    continue;
-                                }
-                                let result = (|| {
-                                    if connection.is_none() {
+                                let result = session.poll(
+                                    &mut group,
+                                    || {
                                         output.send(
                                             json!({"event":"status","key":"status.connecting"}),
                                         );
@@ -334,25 +350,16 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                             .set_password(password)?;
                                             password_to_save = None;
                                         }
-                                        account_verified = true;
                                         output.send(json!({"event":"account","state":"signed_in","trash_url":remote.web_trash_url()}));
-                                        connection = Some(remote);
-                                    }
-                                    let mut log = |message| {
-                                        output.send(json!({"event":"activity","message":message}))
-                                    };
-                                    group.poll(
-                                        connection.as_mut().unwrap(),
-                                        &policy.cancel,
-                                        &mut log,
-                                    )
-                                })();
+                                        Ok(remote)
+                                    },
+                                    &policy.cancel,
+                                    &mut |message| output.send(json!({"event":"activity","message":message})),
+                                );
                                 match result {
-                                    Ok(report) => {
+                                    Ok(None) => thread::sleep(Duration::from_millis(250)),
+                                    Ok(Some(report)) => {
                                         backoff = 5;
-                                        if report.failed_folders > 0 {
-                                            connection = None;
-                                        }
                                         output.send(json!({"event":"report","report":report}));
                                         if settings.sync_folders.as_ref().is_some_and(Vec::is_empty)
                                         {
@@ -360,8 +367,8 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                         }
                                     }
                                     Err(_) if policy.cancel.load(Ordering::Relaxed) => break,
-                                    Err(_) if policy.power_paused() && account_verified => {
-                                        connection = None;
+                                    Err(_) if policy.power_paused() && session.verified() => {
+                                        session.reset();
                                         continue;
                                     }
                                     Err(error)
@@ -375,13 +382,13 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                                         output.send(
                                             json!({"event":"retry","details":format!("{error:#}")}),
                                         );
-                                        connection = None;
+                                        session.reset();
                                         group.invalidate();
                                         let until = Instant::now() + Duration::from_secs(backoff);
                                         backoff = (backoff * 2).min(300);
                                         while Instant::now() < until
                                             && !policy.cancel.load(Ordering::Relaxed)
-                                            && (!policy.power_paused() || !account_verified)
+                                            && (!policy.power_paused() || !session.verified())
                                         {
                                             if immediate.swap(false, Ordering::Relaxed) {
                                                 break;

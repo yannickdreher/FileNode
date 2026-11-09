@@ -50,7 +50,8 @@ pub fn sync_with_scanner<R: Remote>(
     scanner: &mut crate::scanner::LocalScanner,
 ) -> Result<Report> {
     config.validate()?;
-    store::ensure_private_path(&config.local_folder)?;
+    store::ensure_state_directory(&config.private_directory()?)?;
+    scanner.connect_cloud(config, remote)?;
     if let Some(old) = store.get_meta::<String>("account_id")? {
         if old != remote.account_id() {
             bail!("Server selected a different account; synchronization blocked");
@@ -182,14 +183,26 @@ pub fn sync_with_scanner<R: Remote>(
             // writing every accepted file would defeat the event-invalidated cache.
             if base.get(&path).is_some_and(|b| {
                 &b.local == l && b.remote_id == node.id && b.remote_blob == node.blob_id
-            }) {
+            }) && (!config.files_on_demand
+                || crate::cloud::matches_node(
+                    &disk::checked_path(&config.local_folder, &path)?,
+                    node,
+                    l,
+                )?)
+            {
                 continue;
             }
             disk::verify_local(&config.local_folder, &path, Some(l), config.file_limit())?;
+            if config.files_on_demand {
+                scanner.publish_cloud(&path, node, Some(l))?;
+            }
             store.record(&path, l, node)?;
             continue;
         }
-        if expected.is_some_and(|entry| entry.kind == Kind::File) {
+        if expected.is_some_and(|entry| entry.kind == Kind::File)
+            && crate::cloud::committed_entry(&disk::checked_path(&config.local_folder, &path)?)?
+                .is_none()
+        {
             let target = disk::checked_path(&config.local_folder, &path)?;
             if disk::open_snapshot(&target).is_err() {
                 report.deferred += 1;
@@ -219,6 +232,7 @@ pub fn sync_with_scanner<R: Remote>(
         let mut prefetched = prepared.remove(&path);
         let operation = match &action {
             Action::Upload(_) => "upload",
+            Action::Download(_) if config.files_on_demand => "placeholder",
             Action::Download(_) | Action::Reconcile(_) => "download",
             Action::DeleteLocal(_) | Action::DeleteRemote(_) => "trash",
             Action::Conflict(_) => "compare",
@@ -259,6 +273,9 @@ pub fn sync_with_scanner<R: Remote>(
                     size: 0,
                 };
                 store.record(&path, &local, &tree[&path])?;
+                if config.files_on_demand {
+                    scanner.publish_cloud(&path, &tree[&path], Some(&local))?;
+                }
                 report.downloaded += 1;
             }
             Action::CreateRemoteDir(_) => {
@@ -273,6 +290,9 @@ pub fn sync_with_scanner<R: Remote>(
                     &mut snapshot.state,
                 )?;
                 store.record(&path, expected.context("Directory is missing")?, &node)?;
+                if config.files_on_demand {
+                    scanner.publish_cloud(&path, &node, expected)?;
+                }
                 tree.insert(path.clone(), node);
                 report.uploaded += 1;
             }
@@ -339,12 +359,41 @@ pub fn sync_with_scanner<R: Remote>(
                     )?
                 };
                 store.record(&path, expected, &node)?;
+                if config.files_on_demand {
+                    scanner.publish_cloud(&path, &node, Some(expected))?;
+                }
                 tree.insert(path.clone(), node);
                 report.uploaded += 1;
             }
             Action::Download(_) | Action::Reconcile(_) => {
                 let node = tree.get(&path).context("Download requires a remote file")?;
+                if config.files_on_demand && !matches!(action, Action::Reconcile(_)) {
+                    check_state(remote, &snapshot.state)?;
+                    disk::verify_local(&config.local_folder, &path, expected, config.file_limit())?;
+                    let target = disk::checked_path(&config.local_folder, &path)?;
+                    if target.exists() && !crate::cloud::is_owned(&target)? {
+                        disk::preserve_in(
+                            &config.local_folder,
+                            &path,
+                            &config.private_directory()?,
+                        )?;
+                    }
+                    let incoming = scanner.publish_cloud(&path, node, None)?;
+                    store.record(&path, &incoming, node)?;
+                    store.done(&op)?;
+                    activity.finish("synced");
+                    report.downloaded += 1;
+                    continue;
+                }
                 let staged = jmap::transfer_path(&config.local_folder, node);
+                let staged = if config.files_on_demand {
+                    config
+                        .private_directory()?
+                        .join("transfers")
+                        .join(staged.file_name().context("Transfer name")?)
+                } else {
+                    staged
+                };
                 remote.download(node, &staged)?;
                 let incoming = disk::hash_file(&staged, config.file_limit())?;
                 check_state(remote, &snapshot.state)?;
@@ -364,13 +413,20 @@ pub fn sync_with_scanner<R: Remote>(
                             report.conflicts += 1;
                             report.needs_rescan = true;
                         } else {
-                            disk::preserve(&config.local_folder, &path)?;
+                            disk::preserve_in(
+                                &config.local_folder,
+                                &path,
+                                &config.private_directory()?,
+                            )?;
                         }
                     }
-                    fs::rename(&staged, &target).context("Atomically install download")?;
+                    disk::install_download(&config.local_folder, &staged, &target)?;
                     report.downloaded += 1;
                 }
                 store.record(&path, &incoming, node)?;
+                if config.files_on_demand {
+                    scanner.publish_cloud(&path, node, Some(&incoming))?;
+                }
             }
             Action::Conflict(_) => {
                 check_state(remote, &snapshot.state)?;
@@ -395,7 +451,15 @@ pub fn sync_with_scanner<R: Remote>(
                 if target.is_dir() && fs::read_dir(&target)?.next().is_some() {
                     bail!("Directory is not empty; preserving new local files: {path}");
                 }
-                disk::preserve(&config.local_folder, &path)?;
+                if config.files_on_demand && crate::cloud::committed_entry(&target)?.is_some() {
+                    if target.is_dir() {
+                        fs::remove_dir(&target)?;
+                    } else {
+                        fs::remove_file(&target)?;
+                    }
+                } else {
+                    disk::preserve_in(&config.local_folder, &path, &config.private_directory()?)?;
+                }
                 store.forget(&path)?;
                 report.recycled += 1;
             }
@@ -454,6 +518,7 @@ pub fn sync_with_scanner<R: Remote>(
         activity.finish("synced");
         log(Message::new(completed).with("path", &path));
     }
+    scanner.cloud_availability()?;
     Ok(report)
 }
 

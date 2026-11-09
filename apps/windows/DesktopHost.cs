@@ -288,6 +288,8 @@ internal sealed class DesktopHost
         var add = Button("settings.add_folder", () => _ = AddFolder());
         add.IsEnabled = core.Ready && core.AccountState != "checking"; editableControls.Add(add); panel.Children.Add(add);
         panel.Children.Add(Label("settings.stop_hint"));
+        Switch(panel, "settings.files_on_demand", "files_on_demand", false);
+        panel.Children.Add(Label("settings.files_on_demand_hint"));
         var deletes = new ToggleSwitch { Header = core.T("settings.deletes"), IsOn = core.Flag("propagate_deletes"), IsEnabled = core.Ready && core.AccountState != "checking" }; panel.Children.Add(deletes); editableControls.Add(deletes);
         var patterns = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, Height = 180, Text = string.Join("\n", (core.Config["exclude_patterns"] as JsonArray ?? []).Select(item => item!.ToString())), IsEnabled = core.Ready && core.AccountState != "checking" };
         editableControls.Add(patterns);

@@ -1,4 +1,7 @@
 {
+  "activity.online_only": "Available online · downloads when opened",
+  "settings.files_on_demand": "Files On-Demand (Windows Explorer)",
+  "settings.files_on_demand_hint": "See all server files in Explorer and download content when opening a file. Right-click to keep files on this device or free up space. Use a separate NTFS folder outside OneDrive or other cloud providers. Keep FileNode running to open online-only files. Before disabling or stopping sync, keep the entire folder on this device and wait for downloads to finish.",
   "language.label": "Language",
   "language.auto": "System language",
   "nav.storage": "YOUR FILE STORAGE",
@@ -72,7 +75,7 @@
   "settings.save": "Save settings",
   "settings.web": "Web client URL",
   "about.description": "A desktop companion for Stalwart JMAP Files. Windows and Linux. English and German.",
-  "about.limits": "Preview: full local files, event-driven scanning and JMAP changes. Files on demand and block-level transfers are not included yet. Browser sign-in requires a compatible server.",
+  "about.limits": "Preview: Windows Files On-Demand with Explorer integration, or fully local files on Windows and Linux. Block-level upload deltas are not included. Browser sign-in requires a compatible server.",
   "about.project": "Project and documentation",
   "log.watcher_fallback": "File watching is unavailable; using full content verification on every scan.",
   "log.uploaded": "Uploaded · {path}",

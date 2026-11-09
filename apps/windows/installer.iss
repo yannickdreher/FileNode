@@ -49,6 +49,21 @@ Name: "{autoprograms}\FileNode"; Filename: "{app}\filenode-ui.exe"; WorkingDir: 
 Filename: "{app}\filenode-ui.exe"; Description: "{cm:LaunchProgram,FileNode}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+function InitializeUninstall(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(ExpandConstant('{app}\filenode-core.exe'), '--check-uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if Result then Result := ResultCode = 0;
+  if not Result then
+  begin
+    if ActiveLanguage = 'german' then
+      MsgBox('Bitte deaktiviere zuerst Dateien bei Bedarf in FileNode. Wähle im Explorer Immer auf diesem Gerät behalten und warte, bis alle Dateien heruntergeladen wurden. So bleiben deine Dateien nach der Deinstallation verfügbar.', mbError, MB_OK)
+    else
+      MsgBox('Disable Files On-Demand in FileNode before uninstalling. In Explorer, choose Always keep on this device and wait for downloads to finish. This keeps your files accessible after removal.', mbError, MB_OK);
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   Command: String;

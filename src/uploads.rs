@@ -12,13 +12,8 @@ pub fn stage(config: &Config, path: &str, expected: &LocalEntry) -> Result<tempf
         config.file_limit(),
     )?;
     let source = disk::checked_path(&config.local_folder, path)?;
-    let staged = tempfile::NamedTempFile::new_in(
-        config
-            .local_folder
-            .join(disk::PRIVATE_DIR)
-            .join("transfers"),
-    )?
-    .into_temp_path();
+    let staged = tempfile::NamedTempFile::new_in(config.private_directory()?.join("transfers"))?
+        .into_temp_path();
     disk::stage_snapshot(&source, &staged)?;
     if &disk::hash_file(&staged, config.file_limit())? != expected {
         bail!("File changed while preparing upload: {path}");

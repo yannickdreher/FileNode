@@ -60,6 +60,9 @@ struct Args {
     /// Write a native Event Log/journal test entry without accessing an account
     #[arg(long)]
     test_log: bool,
+    /// Refuse removal while registered cloud folders could need this provider.
+    #[arg(long, hide = true)]
+    check_uninstall: bool,
 }
 
 fn main() -> Result<()> {
@@ -79,6 +82,11 @@ fn main() -> Result<()> {
 
 fn run() -> Result<()> {
     let args = Args::parse();
+    if args.check_uninstall {
+        #[cfg(windows)]
+        filenode::cloud::check_uninstall()?;
+        return Ok(());
+    }
     if args.test_log {
         filenode::logger::self_test().context("Write native diagnostic test")?;
         return Ok(());
