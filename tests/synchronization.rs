@@ -1280,8 +1280,18 @@ fn upgrading_root_local_state_preserves_sync_baselines_and_deletions() {
     cloud.files_on_demand = true;
     assert_eq!(state, cloud.private_directory().unwrap());
     let old = f.folder.path().join(filesystem::PRIVATE_DIR);
-    fs::rename(&state, &old).unwrap();
     fs::create_dir_all(old.join("history/previous")).unwrap();
+    // CI can mount application data and temporary sync roots on different
+    // filesystems. Create a consistent legacy database instead of renaming
+    // the external directory across those mounts.
+    let db = rusqlite::Connection::open(state.join("state.sqlite")).unwrap();
+    db.execute(
+        "VACUUM INTO ?1",
+        [old.join("state.sqlite").to_string_lossy().as_ref()],
+    )
+    .unwrap();
+    drop(db);
+    fs::remove_file(state.join("state.sqlite")).unwrap();
     fs::write(old.join("history/previous/backup.txt"), "older version").unwrap();
     let writes = f.server.writes;
     let report = f.run().unwrap();
