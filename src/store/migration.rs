@@ -26,6 +26,7 @@ fn metadata_for_copy(path: &Path, _allow_cloud: bool) -> Result<Option<fs::Metad
                 use std::os::windows::fs::MetadataExt;
                 if meta.file_attributes() & 0x400 != 0
                     && !(_allow_cloud && crate::cloud::is_owned(path)?)
+                    && !crate::cloud::is_cloud_placeholder(path)?
                 {
                     bail!("Reparse point in internal storage: {}", path.display());
                 }
