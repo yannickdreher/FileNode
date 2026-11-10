@@ -26,6 +26,7 @@ internal sealed class DesktopHost
     private readonly Dictionary<(string, string), FileActivityRow> activityRows = [];
     private readonly List<(string Folder, TextBlock Label)> statusFolders = [], pageFolders = [];
     private readonly List<(string Folder, Expander Details, TextBlock Text)> folderErrors = [];
+    private readonly List<ToggleSwitch> folderCloudControls = [];
     private InfoBar? accountStatus;
     private TextBlock? limitsInfo;
     private bool quitting, background, powerPublished;
@@ -260,7 +261,7 @@ internal sealed class DesktopHost
         {
             foreach (var control in folderControls) editableControls.Remove(control);
             folderControls.Clear();
-            rows.Children.Clear(); pageFolders.Clear(); folderErrors.Clear();
+            rows.Children.Clear(); pageFolders.Clear(); folderErrors.Clear(); folderCloudControls.Clear();
             var folders = core.Config["sync_folders"] as JsonArray ?? [];
             if (folders.Count == 0) rows.Children.Add(Label("settings.no_folders"));
             for (int i = 0; i < folders.Count; i++)
@@ -271,6 +272,16 @@ internal sealed class DesktopHost
                 var content = new StackPanel { Spacing = 8 };
                 content.Children.Add(new TextBlock { Text = path, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, TextWrapping = TextWrapping.Wrap });
                 content.Children.Add(new TextBlock { Text = core.T("settings.folder_target") + ": /" + item["remote_path"], Opacity = .7, TextWrapping = TextWrapping.Wrap });
+                var cloud = new ToggleSwitch { Header = core.T("settings.files_on_demand"), IsOn = item["files_on_demand"]?.GetValue<bool>() ?? core.Flag("files_on_demand"), IsEnabled = core.Ready && core.AccountState != "checking" };
+                cloud.Toggled += async (_, _) =>
+                {
+                    var next = (core.Config["sync_folders"] as JsonArray ?? []).DeepClone().AsArray();
+                    var selectedFolder = next.OfType<JsonObject>().FirstOrDefault(folder => folder["local_folder"]?.ToString() == path);
+                    if (selectedFolder is null) return;
+                    selectedFolder["files_on_demand"] = cloud.IsOn;
+                    await core.Apply(new() { ["sync_folders"] = next });
+                };
+                editableControls.Add(cloud); folderControls.Add(cloud); folderCloudControls.Add(cloud); content.Children.Add(cloud);
                 var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
                 actions.Children.Add(Button("action.open", () => Open(path)));
                 var state = new TextBlock { Text = core.FolderStatus(path), FontSize = 13 }; content.Children.Add(state); pageFolders.Add((path, state));
@@ -288,7 +299,6 @@ internal sealed class DesktopHost
         var add = Button("settings.add_folder", () => _ = AddFolder());
         add.IsEnabled = core.Ready && core.AccountState != "checking"; editableControls.Add(add); panel.Children.Add(add);
         panel.Children.Add(Label("settings.stop_hint"));
-        Switch(panel, "settings.files_on_demand", "files_on_demand", false);
         panel.Children.Add(Label("settings.files_on_demand_hint"));
         var deletes = new ToggleSwitch { Header = core.T("settings.deletes"), IsOn = core.Flag("propagate_deletes"), IsEnabled = core.Ready && core.AccountState != "checking" }; panel.Children.Add(deletes); editableControls.Add(deletes);
         var patterns = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, Height = 180, Text = string.Join("\n", (core.Config["exclude_patterns"] as JsonArray ?? []).Select(item => item!.ToString())), IsEnabled = core.Ready && core.AccountState != "checking" };
@@ -323,7 +333,7 @@ internal sealed class DesktopHost
             var folder = await picker.PickSingleFolderAsync();
             if (folder is null) return;
             var next = (core.Config["sync_folders"] as JsonArray ?? []).DeepClone().AsArray();
-            next.Add(new JsonObject { ["local_folder"] = folder.Path, ["remote_path"] = "" });
+            next.Add(new JsonObject { ["local_folder"] = folder.Path, ["remote_path"] = "", ["files_on_demand"] = false });
             await core.Apply(new() { ["sync_folders"] = next }, connect: core.Authenticated);
         }
         catch (Exception exception) { if (pageError is not null) pageError.Text = exception.Message; }
@@ -541,6 +551,15 @@ internal sealed class DesktopHost
             navigation.SelectedItem = navigation.MenuItems[0]; await Task.Delay(150);
             if (editableControls.Any(control => !control.IsEnabled)) throw new InvalidOperationException("Sync settings were disabled while synchronization was running");
             if (pageFolders.Count != 2 || pageFolders[0].Label.Text == pageFolders[1].Label.Text) throw new InvalidOperationException("Folder states are not independent");
+            if (folderCloudControls.Count != 2 || folderCloudControls.Any(control => control.IsOn)) throw new InvalidOperationException("Cloud Files must have an opt-in control on each folder");
+            folderCloudControls[0].IsOn = true;
+            var modeDeadline = DateTime.UtcNow.AddSeconds(5);
+            while (core.Config["sync_folders"]?[0]?["files_on_demand"]?.GetValue<bool>() != true && DateTime.UtcNow < modeDeadline) await Task.Delay(25);
+            if (core.Error != "" || folderCloudControls.Count != 2 || !folderCloudControls[0].IsOn || folderCloudControls[1].IsOn) throw new InvalidOperationException("A folder's Cloud Files switch changed another folder: " + core.Error);
+            folderCloudControls[0].IsOn = false;
+            modeDeadline = DateTime.UtcNow.AddSeconds(5);
+            while (core.Config["sync_folders"]?[0]?["files_on_demand"]?.GetValue<bool>() != false && DateTime.UtcNow < modeDeadline) await Task.Delay(25);
+            if (core.Error != "" || folderCloudControls.Any(control => control.IsOn)) throw new InvalidOperationException("Cloud Files switch did not return to full sync: " + core.Error);
             var folderError = folderErrors.Single(item => item.Folder == second);
             if (folderError.Details.Visibility != Visibility.Visible || folderError.Text.Text != "Offline test fixture") throw new InvalidOperationException("Folder error details are not accessible");
             folderError.Details.IsExpanded = true;

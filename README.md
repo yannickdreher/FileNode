@@ -14,7 +14,7 @@ Both frontends share `locales/en.json` and `locales/de.json`, the configuration 
 
 - Verified account sign-in is separate from each folder's sync status. Each file has one activity row with streamed byte progress and completion/retry states.
 - Multiple local folders per account, with automatic server folders named after each selection and independent retry/state for each folder.
-- Optional Windows Files On-Demand: native Explorer navigation, availability icons, online-only placeholders, download on open and keep-on-device/free-space context actions. [Setup](docs/cloud-files.md).
+- Optional Windows Files On-Demand, enabled per folder: native Explorer navigation, availability icons, online-only placeholders, download on open and keep-on-device/free-space context actions. Other folders can remain fully local. [Setup](docs/cloud-files.md).
 - Bidirectional full-file synchronization, SHA-256 comparison, SQLite three-way baselines and a durable operation journal.
 - Both copies survive conflicts; stable remote IDs support remote renames, and unambiguous local file renames preserve server identity.
 - Local deletions automatically move server files and entire folder trees to the shared trash, including large batches, interoperating with Bulwark. Mass-deletion limits protect the reverse direction when removing local working copies. Remote `FileNode/destroy` is never called. [Trash behavior](docs/deletions.md).
@@ -78,7 +78,7 @@ filenode --headless --config /absolute/profile.toml --once --language en
 
 Headless mode requires absolute selected folders and saved credentials. Browser-mode profiles reuse/refresh the desktop session without opening a browser. App-password profiles use the OS keyring or `FILENODE_PASSWORD` supplied by a secret manager. Never put passwords in command-line arguments or TOML. `--dry-run` returns one plan per selection; it can create private local metadata but changes no user files or remote objects. `--once` fails if any selected folder fails. `--once` waits for settling and returns an error if files remain busy/changing beyond twice the settling interval plus 30 seconds; desktop mode continues retrying. Headless mode does not subscribe to desktop power notifications. Size-limited files also make `--once` fail; other eligible files can still complete.
 
-Cloud mode uses external per-user local state under `FileNode/cloud/<root-key>` instead of placing new state inside the sync root. Before disabling it, stopping a cloud folder or uninstalling, keep its entire contents on this device. [Cloud lifecycle](docs/cloud-files.md).
+Cloud mode shares the external per-user folder store with full synchronization; no permanent state directory is created inside the sync root. Before disabling it, stopping a cloud folder or uninstalling, keep its entire contents on this device. [Cloud lifecycle](docs/cloud-files.md).
 
 ## Limits and recovery
 
@@ -86,7 +86,7 @@ This is a preview with optional Windows Files On-Demand in dedicated NTFS roots 
 
 The complete namespace is still enumerated; cached hashes reduce content reads, not directory-walk complexity. Watcher loss, manual checks, reconnects and periodic verification rehash contents. Settling and locks reduce races but cannot prove that every application has finished writing. Unix locks are advisory. Payload caps exclude TLS/HTTP overhead and socket buffering. [Architecture](docs/architecture.md) describes these boundaries and acceptance work.
 
-Never remove `.filenode` to repair a profile: it holds the baseline, journal, transfers and recovery history. Pause sync before restoring copies. The Recycle bin uses the server trash. Separate internal overwrite protection uses `.filenode/history` locally and `.filenode-history` remotely; it has no automatic retention policy and consumes space/quota. Maintain independent backups.
+Local baselines, journals, transfers and recovery history live outside the sync folders: `%LOCALAPPDATA%\FileNode\data\roots\<folder-key>` on Windows and normally `~/.local/share/filenode/roots/<folder-key>` on Linux. Existing `.filenode` directories and older cloud stores are migrated automatically on the next sync, with verified recovery copies retained before old directories are removed. See [local state and migration](docs/local-state.md). Never delete state to repair a profile. Pause sync before restoring copies. The Recycle bin uses the server trash. Separate internal overwrite protection uses the external store's `history` locally and `.filenode-history` remotely; it has no automatic retention policy and consumes space/quota. Maintain independent backups.
 
 Adapters cover Stalwart 0.16 `nodeType`/`type` and the newer `@type`/`mediaType` FileNode schema. Loopback tests verify both; live Stalwart compatibility, interrupted-power behavior and large multi-device workloads still need acceptance testing.
 

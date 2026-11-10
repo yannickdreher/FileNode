@@ -402,25 +402,21 @@ pub fn check_detach(config: &Config) -> Result<()> {
 }
 
 pub fn removed_roots(before: &Config, after: &Config) -> Result<Vec<Config>> {
-    if after.files_on_demand {
-        for config in after.folder_configs()? {
-            validate_root(&config)?;
-        }
+    let mut keep = Vec::new();
+    for config in after
+        .folder_configs()?
+        .iter()
+        .filter(|root| root.files_on_demand)
+    {
+        validate_root(config)?;
+        keep.push(super::root_key(config)?);
     }
-    if !before.files_on_demand {
-        return Ok(Vec::new());
-    }
-    let keep: Vec<_> = if after.files_on_demand {
-        after
-            .folder_configs()?
-            .iter()
-            .map(super::root_key)
-            .collect::<Result<_>>()?
-    } else {
-        Vec::new()
-    };
     let mut removed = Vec::new();
-    for root in before.folder_configs()? {
+    for root in before
+        .folder_configs()?
+        .into_iter()
+        .filter(|root| root.files_on_demand)
+    {
         if !keep.contains(&super::root_key(&root)?) {
             check_detach(&root)?;
             removed.push(root);
@@ -433,17 +429,9 @@ pub fn detach(config: &Config) -> Result<()> {
     check_detach(config)?;
     let was_registered = is_registered(config)?;
     let _apartment = Apartment::new()?;
-    let source = config.private_directory()?.join("state.sqlite");
-    let store = if source.exists() {
-        Some(crate::store::Store::open(config)?)
-    } else {
-        None
-    };
-    let baselines = store
-        .as_ref()
-        .map(|store| store.baselines())
-        .transpose()?
-        .unwrap_or_default();
+    // Opening also migrates databases from older releases before detaching.
+    let store = crate::store::Store::open(config)?;
+    let baselines = store.baselines()?;
     let mut committed_hashes = HashMap::new();
     // Deepest files first; retain data and all local edits. Reverting a partial
     // file is forbidden by the platform as an additional race protection.
@@ -494,43 +482,19 @@ pub fn detach(config: &Config) -> Result<()> {
     if was_registered {
         StorageProviderSyncRootManager::Unregister(&HSTRING::from(root_id(config)?))?;
     }
-    // The old full-sync database may be stale. Merge the latest baselines back
-    // from the external cloud database after all placeholders are ordinary files.
-    // Replace synthetic hashes with actual hashes to avoid re-uploading materialized data.
-    if let Some(store) = store {
-        for (path, baseline) in baselines {
-            if let Some(local) = committed_hashes.remove(&path) {
-                let mut updated = baseline;
-                updated.local = local;
-                store.db.execute(
-                    "UPDATE baseline SET value=?1 WHERE path=?2",
-                    rusqlite::params![serde_json::to_string(&updated)?, path],
-                )?;
-            }
+    // Both modes share the external database. Replace synthetic hashes with
+    // actual hashes to avoid re-uploading materialized data after detachment.
+    for (path, baseline) in baselines {
+        if let Some(local) = committed_hashes.remove(&path) {
+            let mut updated = baseline;
+            updated.local = local;
+            store.db.execute(
+                "UPDATE baseline SET value=?1 WHERE path=?2",
+                rusqlite::params![serde_json::to_string(&updated)?, path],
+            )?;
         }
-        let legacy = config.local_folder.join(crate::filesystem::PRIVATE_DIR);
-        crate::store::ensure_state_directory(&legacy)?;
-        use fs2::FileExt;
-        let lock = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(legacy.join("lock"))?;
-        lock.try_lock_exclusive()?;
-        let legacy_db = legacy.join("state.sqlite");
-        if legacy_db.exists() {
-            let old = rusqlite::Connection::open(&legacy_db)?;
-            old.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-        }
-        let staged = tempfile::NamedTempFile::new_in(&legacy)?.into_temp_path();
-        std::fs::remove_file(&staged)?;
-        store
-            .db
-            .execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
-        std::fs::rename(&staged, legacy_db)?;
-        store.set_meta("cloud_detached", &true)?;
     }
+    store.set_meta("cloud_detached", &true)?;
     Ok(())
 }
 

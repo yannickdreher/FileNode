@@ -41,14 +41,15 @@ pub fn folded(path: &str) -> String {
 
 pub fn ignored(path: &str) -> bool {
     path.split('/').any(|part| {
-        [
-            PRIVATE_DIR,
-            REMOTE_HISTORY,
-            ".filenode-trash",
-            ".trash",
-            ".git",
-        ]
-        .contains(&part.to_lowercase().as_str())
+        part.to_ascii_lowercase().starts_with(".filenode-transfer-")
+            || [
+                PRIVATE_DIR,
+                REMOTE_HISTORY,
+                ".filenode-trash",
+                ".trash",
+                ".git",
+            ]
+            .contains(&part.to_lowercase().as_str())
     })
 }
 
@@ -265,9 +266,6 @@ pub fn verify_local(
     Ok(())
 }
 
-pub fn preserve(root: &Path, relative: &str) -> Result<PathBuf> {
-    preserve_in(root, relative, &root.join(PRIVATE_DIR))
-}
 pub fn preserve_in(root: &Path, relative: &str, private: &Path) -> Result<PathBuf> {
     let source = checked_path(root, relative)?;
     let history = private
@@ -278,33 +276,33 @@ pub fn preserve_in(root: &Path, relative: &str, private: &Path) -> Result<PathBu
     match fs::rename(&source, &dest) {
         Ok(()) => Ok(dest),
         Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
-            // Cloud state can live on a different volume. Keep recovery moves
-            // atomic by retaining that version in the root's excluded history.
-            let local_private = root.join(PRIVATE_DIR);
-            crate::store::ensure_state_directory(&local_private)?;
-            let history = local_private
-                .join("history")
-                .join(uuid::Uuid::new_v4().to_string());
-            fs::create_dir(&history)?;
-            let dest = history.join(source.file_name().context("File name is missing")?);
-            fs::rename(&source, &dest)
-                .context("Preserve previous version on its original volume")?;
+            preserve_across_volumes(&source, &dest)?;
             Ok(dest)
         }
         Err(error) => Err(error).context("Preserve previous version for recovery"),
     }
 }
 
-pub fn install_download(root: &Path, staged: &Path, target: &Path) -> Result<()> {
+fn preserve_across_volumes(source: &Path, destination: &Path) -> Result<()> {
+    // Keep a complete, verified external copy before removing any originals.
+    // A failed backup never removes the source; changed/new entries are retained.
+    crate::store::copy_recovery_tree(source, destination)?;
+    crate::store::remove_recovered_tree(source, destination)
+        .context("Remove original after verifying its recovery copy")
+}
+
+pub fn install_download(_root: &Path, staged: &Path, target: &Path) -> Result<()> {
     match fs::rename(staged, target) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::CrossesDevices => {
-            // Only a completed, verified blob crosses volumes. Copy into an
-            // excluded staging file on the destination volume before publishing.
-            let private = root.join(PRIVATE_DIR);
-            crate::store::ensure_state_directory(&private)?;
+            // Only a completed, verified blob crosses volumes. Copy into a
+            // short-lived sibling on the destination volume before publishing.
+            // The reserved prefix is always excluded, even with custom patterns.
             let mut snapshot = open_snapshot(staged)?;
-            let mut adjacent = tempfile::NamedTempFile::new_in(private.join("transfers"))?;
+            let mut adjacent = tempfile::Builder::new()
+                .prefix(".filenode-transfer-")
+                .suffix(".part")
+                .tempfile_in(target.parent().context("Download destination parent")?)?;
             std::io::copy(&mut snapshot, adjacent.as_file_mut())?;
             adjacent.as_file().sync_all()?;
             adjacent
@@ -370,6 +368,38 @@ mod tests {
     #[test]
     fn case_collisions_are_rejected() {
         assert_eq!(folded("Foo/CAFÉ"), folded("foo/cafe\u{301}"));
+    }
+    #[test]
+    fn cross_volume_recovery_copies_and_verifies_a_complete_tree_before_removal() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("sync/Documents");
+        let backup = temp.path().join("appdata/history/previous");
+        fs::create_dir_all(source.join("empty")).unwrap();
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        fs::write(source.join("important.txt"), "important contents").unwrap();
+        // Exercise the copy fallback directly, even on single-volume CI hosts.
+        preserve_across_volumes(&source, &backup).unwrap();
+        assert!(!source.exists());
+        assert!(backup.join("empty").is_dir());
+        assert_eq!(
+            fs::read(backup.join("important.txt")).unwrap(),
+            b"important contents"
+        );
+        assert!(!temp.path().join("sync/.filenode").exists());
+    }
+
+    #[test]
+    fn reserved_transfer_siblings_never_enter_sync_even_without_user_exclusions() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join(".filenode-transfer-interrupted.part"),
+            "partial",
+        )
+        .unwrap();
+        fs::write(temp.path().join("document.txt"), "complete").unwrap();
+        let tree = scan(temp.path(), 1024).unwrap();
+        assert_eq!(tree.len(), 1);
+        assert!(tree.contains_key("document.txt"));
     }
     #[cfg(unix)]
     #[test]

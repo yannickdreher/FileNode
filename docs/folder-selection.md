@@ -1,6 +1,6 @@
 # Selecting folders
 
-Windows can optionally use [Files On-Demand](cloud-files.md). Use dedicated NTFS roots outside other cloud providers. Before stopping a cloud folder, pin its entire contents in Explorer and wait for completion; FileNode unregisters it while retaining local and remote files.
+Windows can optionally use [Files On-Demand](cloud-files.md), enabled separately on each folder's card. A profile can mix full local synchronization and Cloud Files. Enabled cloud folders require dedicated NTFS roots outside other cloud providers; disabled folders are not registered with Explorer. Before stopping a cloud folder, pin its entire contents in Explorer and wait for completion; FileNode unregisters it while retaining local and remote files.
 
 One profile connects one account and up to 64 local folders. In **Sync and backup**, select **Add folder**. The selection is saved immediately and the generated server path appears below it. The list remains editable while syncing. Changes safely stop the previous worker before a replacement can access the same folder databases. Sync continues automatically; adding a folder also starts it when the account is signed in. Otherwise, **Sign in** starts it. The tray menu also provides **Start syncing**.
 
@@ -15,7 +15,7 @@ New selections use their final folder name at the server root:
 
 The selected server folder is resolved or created at the root. Only the selected leaf's tree is synchronized: selecting `Documents/Büro` synchronizes it to `/Büro` without including its local parent or siblings. Server paths are displayed, not editable. Filesystem roots, the entire home directory, reserved names, overlapping local trees and overlapping server paths are rejected. Names must be portable to Windows and Linux. Two selections with the same name cannot share a profile. Previously saved server paths keep their existing binding; this change does not move server data or reset baselines.
 
-**Stop sync** removes the selection without deleting local files, remote files or recovery history. No remote delete operation is performed by removing a selection. A stopped local folder keeps its `.filenode` state. Re-adding it to the same account and path resumes its existing three-way baseline; moving it to a different account or server path is refused by the store identity checks.
+**Stop sync** removes the selection without deleting local files, remote files or recovery history. No remote delete operation is performed by removing a selection. Its [external per-user state](local-state.md) is retained. Re-adding it to the same account and path resumes its existing three-way baseline; moving it to a different account or server path is refused by the store identity checks. Older root-local `.filenode` directories are migrated automatically when synchronization next starts.
 
 Each selection has its own watcher, SQLite state, settling observations and retry deadline. An unavailable local drive is deferred without recreating its root; other selections continue. Failures retry with backoff from 5 seconds to 5 minutes. **Check now** retries all selections immediately. A selected server folder that was previously pinned by ID must not silently be recreated if it disappears.
 

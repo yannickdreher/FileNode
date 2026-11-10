@@ -198,7 +198,9 @@ internal sealed class CoreClient : IAsyncDisposable
                 Error = message["details"]?.ToString() ?? "Unknown Rust worker error"; StatusKey = "status.retry"; break;
             case "power": PowerPaused = message["paused"]!.GetValue<bool>(); if (PowerPaused) StatusKey = "status.power_paused"; break;
         }
-        Changed?.Invoke(configChanged);
+        // A refused setting must be redrawn from the last accepted profile,
+        // rather than leaving an optimistic Cloud Files toggle enabled.
+        Changed?.Invoke(configChanged || type == "error");
         // The host publishes initial power state while handling ready, before auto-connect.
         if (type == "ready" && Ready && Text("username") != "") _ = Send("connect");
     }

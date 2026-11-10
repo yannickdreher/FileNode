@@ -18,6 +18,7 @@ fn multiple_folder_config(home: &Path) -> Config {
                 .map(|local_folder| filenode::config::SyncFolder {
                     remote_path: Config::derive_remote_path(&local_folder, home).unwrap(),
                     local_folder,
+                    files_on_demand: None,
                 })
                 .collect(),
         ),
@@ -200,6 +201,7 @@ fn an_unavailable_folder_does_not_recreate_local_roots_or_block_healthy_folders(
         SyncFolder {
             local_folder: missing.clone(),
             remote_path: "Offline".into(),
+            files_on_demand: None,
         },
     );
     fs::write(home.path().join("Desktop/healthy.txt"), "available").unwrap();
@@ -264,6 +266,7 @@ fn multiple_roots_reject_overlaps_case_collisions_and_unsafe_remote_paths() {
         .push(filenode::config::SyncFolder {
             remote_path: Config::derive_remote_path(&duplicate, home.path()).unwrap(),
             local_folder: duplicate,
+            files_on_demand: None,
         });
     assert!(collisions.validate().is_err());
     assert!(Config::derive_remote_path(home.path(), home.path()).is_err());
@@ -746,15 +749,10 @@ impl Fixture {
         fs::read_to_string(self.folder.path().join(path)).unwrap()
     }
     fn history_contains(&self, value: &[u8]) -> bool {
-        walkdir::WalkDir::new(
-            self.folder
-                .path()
-                .join(filesystem::PRIVATE_DIR)
-                .join("history"),
-        )
-        .into_iter()
-        .filter_map(Result::ok)
-        .any(|e| e.file_type().is_file() && fs::read(e.path()).unwrap() == value)
+        walkdir::WalkDir::new(self.config.private_directory().unwrap().join("history"))
+            .into_iter()
+            .filter_map(Result::ok)
+            .any(|e| e.file_type().is_file() && fs::read(e.path()).unwrap() == value)
     }
 }
 
@@ -1268,6 +1266,33 @@ fn profile_identity_and_single_writer_are_enforced() {
     let mut changed = f.config.clone();
     changed.username = "other@example.org".into();
     assert!(Store::open(&changed).is_err());
+}
+
+#[test]
+fn upgrading_root_local_state_preserves_sync_baselines_and_deletions() {
+    let mut f = Fixture::new();
+    f.local("document.txt", "already synchronized");
+    f.local("remove.txt", "delete after migration");
+    f.run().unwrap();
+    let state = f.config.private_directory().unwrap();
+    assert!(!state.starts_with(f.folder.path()));
+    let mut cloud = f.config.clone();
+    cloud.files_on_demand = true;
+    assert_eq!(state, cloud.private_directory().unwrap());
+    let old = f.folder.path().join(filesystem::PRIVATE_DIR);
+    fs::rename(&state, &old).unwrap();
+    fs::create_dir_all(old.join("history/previous")).unwrap();
+    fs::write(old.join("history/previous/backup.txt"), "older version").unwrap();
+    let writes = f.server.writes;
+    let report = f.run().unwrap();
+    assert_eq!(report.uploaded + report.downloaded + report.conflicts, 0);
+    assert_eq!(f.server.writes, writes);
+    assert!(!old.exists());
+    assert!(f.history_contains(b"older version"));
+    fs::remove_file(f.folder.path().join("remove.txt")).unwrap();
+    assert_eq!(f.run().unwrap().recycled, 1);
+    assert_eq!(f.read("document.txt"), "already synchronized");
+    assert!(!old.exists());
 }
 
 #[test]

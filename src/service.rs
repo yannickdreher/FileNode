@@ -143,7 +143,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     #[cfg(windows)]
                     let cloud_removed = filenode::cloud::removed_roots(&config, &next)?;
                     #[cfg(not(windows))]
-                    if next.files_on_demand {
+                    if next.has_cloud_folders() {
                         bail!("Files On-Demand requires Windows");
                     }
                     if next.upload_limit_kib > 1_000_000
