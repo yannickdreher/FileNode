@@ -455,6 +455,7 @@ struct Server {
     fail_snapshot: bool,
     fail_after_create: bool,
     race_on_upload: bool,
+    range_reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Server {
@@ -481,6 +482,30 @@ impl Server {
 }
 
 impl Remote for Server {
+    fn downloader(&self) -> Option<std::sync::Arc<dyn filenode::jmap::Downloader>> {
+        struct Blobs {
+            blobs: HashMap<String, Vec<u8>>,
+            reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl filenode::jmap::Downloader for Blobs {
+            fn read_range(
+                &self,
+                node: &Node,
+                offset: u64,
+                length: u64,
+                _: &AtomicBool,
+                consume: &mut dyn FnMut(&[u8]) -> Result<()>,
+            ) -> Result<()> {
+                self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let bytes = &self.blobs[node.blob_id.as_ref().unwrap()];
+                consume(&bytes[offset as usize..(offset + length) as usize])
+            }
+        }
+        Some(std::sync::Arc::new(Blobs {
+            blobs: self.blobs.clone(),
+            reads: self.range_reads.clone(),
+        }))
+    }
     fn upload_limits(&self) -> filenode::jmap::UploadLimits {
         self.limits
     }
@@ -1322,4 +1347,82 @@ fn file_directory_type_conflict_preserves_local_tree() {
         .any(|e| e.file_type().is_file()
             && e.file_name() == "important"
             && fs::read(e.path()).unwrap() == b"keep me"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "Exercises the three-way engine through a real FUSE cloud mount"]
+fn linux_cloud_engine_never_downloads_its_own_upload_and_uses_server_trash() -> Result<()> {
+    struct Cleanup;
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            filenode::cloud::shutdown();
+        }
+    }
+    let mut f = Fixture::new();
+    let _cleanup = Cleanup;
+    f.config.files_on_demand = true;
+    let mut state = f.server.state();
+    let folder = f.server.create(
+        f.config.remote_folder_name()?,
+        None,
+        Kind::Directory,
+        None,
+        0,
+        &mut state,
+    )?;
+    f.server
+        .blobs
+        .insert("initial-blob".into(), b"server document".to_vec());
+    f.server.create(
+        "online.txt",
+        Some(&folder.id),
+        Kind::File,
+        Some("initial-blob"),
+        15,
+        &mut state,
+    )?;
+    assert_eq!(f.run()?.downloaded, 1);
+    assert_eq!(
+        f.server
+            .range_reads
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    f.local("upload.txt", "new local contents");
+    assert_eq!(f.run()?.uploaded, 1);
+    let report = f.run()?;
+    assert_eq!(
+        report.uploaded + report.downloaded,
+        0,
+        "own upload was downloaded again"
+    );
+    assert_eq!(
+        f.server
+            .range_reads
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert_eq!(f.read("online.txt"), "server document");
+    f.server.edit("online.txt", "remote update");
+    f.run()?;
+    assert_eq!(f.read("online.txt"), "remote update");
+    fs::remove_file(f.folder.path().join("upload.txt"))?;
+    assert_eq!(f.run()?.recycled, 1);
+    let trash = f
+        .server
+        .nodes
+        .iter()
+        .find(|n| n.role.as_deref() == Some("trash"))
+        .unwrap()
+        .id
+        .clone();
+    let remote = f.server.node("online.txt");
+    let mut state = f.server.state();
+    f.server
+        .update(&remote, "online.txt", Some(&trash), None, &mut state)?;
+    f.run()?;
+    assert!(!f.folder.path().join("online.txt").exists());
+    assert!(!f.folder.path().join("upload.txt").exists());
+    Ok(())
 }

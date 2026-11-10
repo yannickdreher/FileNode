@@ -60,15 +60,18 @@ On Debian/Ubuntu install the distribution equivalents of:
 
 ```sh
 sudo apt install build-essential pkg-config libdbus-1-dev cmake ninja-build gdb \
+  fuse3 libfuse3-dev libkf6kio-dev libkf6coreaddons-dev extra-cmake-modules \
+  python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-nautilus librsvg2-common \
+  qml6-module-org-kde-kirigami qml6-module-org-kde-desktop qt6-svg-plugins \
   qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window \
   qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs \
   qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript
 sh scripts/build-linux.sh
 ```
 
-Install Rust 1.98.1 through rustup; the repository pins the toolchain and lockfile. An unlocked Secret Service (for example GNOME Keyring or a compatible KDE Wallet setup) is needed for saved credentials. Qt 6 KDE styling is optional. Wayland/X11 and a StatusNotifier host are needed for normal desktop/tray operation. On GNOME a tray extension may be necessary.
+Install Rust 1.98.1 through rustup and use an unlocked Secret Service. The new Linux baseline is Debian 13 with GTK/libadwaita, Kirigami/KF6 and FUSE. GNOME uses its application launcher; KDE uses StatusNotifier. See [Linux setup](linux-cloud-files.md).
 
-Use **FileNode: Linux Qt (GDB)** for the frontend; it disables the tray for convenient window debugging. Use **FileNode: Rust core Linux (GDB)** for the headless engine with a disposable test profile/account. `rust-gdb` can provide Rust pretty printers for terminal debugging. These profiles use the standard Cargo target directory; custom `CARGO_TARGET_DIR` values require matching launch paths.
+Use **FileNode: Linux KDE (GDB)** for the frontend; it disables the tray for convenient window debugging. Use **FileNode: Rust core Linux (GDB)** for the headless engine with a disposable test profile/account. `rust-gdb` can provide Rust pretty printers for terminal debugging. These profiles use the standard Cargo target directory; custom `CARGO_TARGET_DIR` values require matching launch paths.
 
 ## Account-free verification
 

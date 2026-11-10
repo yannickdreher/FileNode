@@ -14,6 +14,7 @@ apps/linux/build*/
 **/obj/
 apps/windows/AppPackages/
 aqtinstall.log
+__pycache__/
 node_modules/
 .npm/
 .release/

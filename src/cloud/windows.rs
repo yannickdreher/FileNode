@@ -13,6 +13,7 @@ use ::windows::{
         Security::{Authorization::ConvertSidToStringSidW, *},
         Storage::{CloudFilters::*, FileSystem::*},
         System::{
+            Com::CoIncrementMTAUsage,
             Threading::{CreateEventW, GetCurrentProcess, OpenProcessToken, ResetEvent},
             WinRT::{RoInitialize, RoUninitialize, RO_INIT_MULTITHREADED},
             IO::{GetOverlappedResult, OVERLAPPED},
@@ -32,7 +33,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex, RwLock,
+        Arc, Mutex, OnceLock, RwLock,
     },
     thread::JoinHandle,
 };
@@ -65,6 +66,19 @@ fn handle(file: &File) -> HANDLE {
 struct Apartment(std::marker::PhantomData<std::rc::Rc<()>>);
 impl Apartment {
     fn new() -> Result<Self> {
+        // windows-rs keeps agile WinRT activation factories in process-wide
+        // caches. Their Windows shell dependencies must outlive short-lived
+        // workers and retry gaps too, not just an individual method call.
+        // Like windows-core's implicit-MTA fallback, retain one bounded MTA
+        // reference until process exit; static factory caches have that lifetime.
+        static PROCESS_MTA: OnceLock<std::result::Result<usize, HRESULT>> = OnceLock::new();
+        if let Err(code) = PROCESS_MTA.get_or_init(|| unsafe {
+            CoIncrementMTAUsage()
+                .map(|cookie| cookie.0 as usize)
+                .map_err(|error| error.code())
+        }) {
+            return Err(::windows::core::Error::from_hresult(*code).into());
+        }
         unsafe {
             RoInitialize(RO_INIT_MULTITHREADED)?;
         }
@@ -370,13 +384,29 @@ fn replace_remote_version(path: &Path, identity: &Identity, bytes: &[u8]) -> Res
 }
 
 pub fn is_registered(config: &Config) -> Result<bool> {
-    let _apartment = Apartment::new()?;
-    Ok(
-        StorageProviderSyncRootManager::GetSyncRootInformationForId(&HSTRING::from(root_id(
-            config,
-        )?))
-        .is_ok(),
-    )
+    // Check the filter's actual root identity without constructing Windows
+    // Storage COM objects for every ordinary full-sync folder/retry. In
+    // particular, a different provider's parent root must not count as ours.
+    registered_root_matches(&config.local_folder, &super::root_key(config)?)
+}
+
+/// A cloud reparse tag describes placeholder data, not a redirected namespace.
+/// Migration can read it through the owning provider while still refusing
+/// symlinks, junctions and unknown reparse tags.
+pub(crate) fn is_cloud_placeholder(path: &Path) -> Result<bool> {
+    let file = metadata_file(path)?;
+    let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
+    unsafe {
+        GetFileInformationByHandleEx(
+            handle(&file),
+            FileAttributeTagInfo,
+            (&mut tag as *mut FILE_ATTRIBUTE_TAG_INFO).cast(),
+            size_of::<FILE_ATTRIBUTE_TAG_INFO>() as u32,
+        )?;
+        let state = CfGetPlaceholderStateFromAttributeTag(tag.FileAttributes, tag.ReparseTag);
+        Ok(state != CF_PLACEHOLDER_STATE_INVALID
+            && state.0 & CF_PLACEHOLDER_STATE_PLACEHOLDER.0 != 0)
+    }
 }
 
 /// Detachment is deliberately explicit and lossless: Windows must already have

@@ -1,4 +1,11 @@
 {
+  "error.command_queue": "Zu viele ausstehende Änderungen. Warte auf den laufenden Vorgang und versuche es erneut.",
+  "settings.add_cloud_folder": "Cloud-Ordner hinzufügen",
+  "settings.linux_files_on_demand": "Dateien bei Bedarf (Linux)",
+  "settings.linux_cloud_hint": "Verwende einen leeren, eigenen Ordner für einen Linux-Cloud-Mount. Dateien sind sichtbar, solange FileNode läuft. Offline-Inhalte bleiben im privaten Cache. Lade vor dem Beenden der Cloud-Synchronisation alle Dateien auf dieses Gerät herunter.",
+  "settings.gnome_background_hint": "FileNode läuft nach dem Schließen des Fensters weiter. Öffne es erneut über den Anwendungsstarter. GNOME hat standardmäßig keinen Systemtray.",
+  "settings.folder_actions": "Ordneraktionen",
+  "error.worker_stopped": "Der Synchronisationsprozess wurde beendet. Starte FileNode neu, um die Verbindung wiederherzustellen.",
   "activity.online_only": "Online verfügbar · Download beim Öffnen",
   "settings.files_on_demand": "Dateien bei Bedarf (Windows-Explorer)",
   "settings.files_on_demand_hint": "Dateien bei Bedarf lässt sich für jeden Ordner getrennt aktivieren. Dann zeigt der Explorer Serverdateien, Verfügbarkeitsstatus und Kontextmenüs zum Behalten oder Freigeben von Speicherplatz. Dafür muss dieser Ordner auf NTFS und außerhalb von OneDrive oder anderen Cloud-Anbietern liegen. Andere Ordner können weiterhin vollständig lokal synchronisiert werden. FileNode muss zum Öffnen reiner Onlinedateien laufen. Vor dem Deaktivieren oder Beenden der Ordnersynchronisation den gesamten Ordner auf diesem Gerät behalten und alle Downloads abwarten.",

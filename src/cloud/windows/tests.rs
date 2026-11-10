@@ -44,6 +44,226 @@ impl Drop for Cleanup {
 }
 
 #[test]
+#[ignore = "Reconnects a persisted Cloud Files registration and migrates state in a fresh process"]
+fn native_registration_survives_process_restart() -> Result<()> {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts/cloud-tests");
+    std::fs::create_dir_all(&fixtures)?;
+    if let Some(root) = std::env::var_os("FILENODE_TEST_RESTART_ROOT") {
+        let root = PathBuf::from(root).canonicalize()?;
+        if !root.starts_with(fixtures.canonicalize()?) {
+            bail!("Restart fixture must remain inside the isolated cloud test directory");
+        }
+        let config = Config {
+            local_folder: root.clone(),
+            username: "process-restart@example.org".into(),
+            files_on_demand: true,
+            ..Config::default()
+        };
+        let bytes = Arc::new(Bytes {
+            data: b"persisted server contents".to_vec(),
+            requests: AtomicUsize::new(0),
+            fail_after: AtomicUsize::new(0),
+            offsets: Mutex::new(Vec::new()),
+        });
+        let node = Node {
+            id: "restart-node".into(),
+            name: "persisted.txt".into(),
+            parent_id: None,
+            blob_id: Some("restart-blob".into()),
+            kind: Kind::File,
+            size: bytes.data.len() as u64,
+            role: None,
+        };
+        let legacy = config.legacy_cloud_directory()?;
+        match std::env::var("FILENODE_TEST_RESTART_PHASE")?.as_str() {
+            "prepare" => {
+                let provider = Provider::connect(&config, bytes.clone())?;
+                let local = provider.publish("persisted.txt", &node, None)?;
+                let store = crate::store::Store::open(&config)?;
+                store.record("persisted.txt", &local, &node)?;
+                std::fs::create_dir_all(&legacy)?;
+                store.db.execute(
+                    "VACUUM INTO ?1",
+                    [legacy.join("state.sqlite").to_string_lossy().as_ref()],
+                )?;
+                drop(store);
+                std::fs::remove_file(config.private_directory()?.join("state.sqlite"))?;
+                assert_eq!(bytes.requests.load(Ordering::SeqCst), 0);
+                // Leave the Explorer registration and online-only file intact,
+                // as the old executable does when quitting for an update.
+            }
+            "restart" => {
+                assert!(legacy.join("state.sqlite").is_file());
+                assert!(is_registered(&config)?, "persisted registration was lost");
+                // The first post-update store open precedes provider connection.
+                let store = crate::store::Store::open(&config)?;
+                let baseline = store.baselines()?.remove("persisted.txt").unwrap();
+                assert_eq!(baseline.remote_id, node.id);
+                assert!(!legacy.exists(), "legacy state was not migrated");
+                assert_eq!(
+                    committed_entry(&root.join("persisted.txt"))?,
+                    Some(baseline.local.clone())
+                );
+                let _provider = Provider::connect(&config, bytes.clone())?;
+                assert_eq!(bytes.requests.load(Ordering::SeqCst), 0);
+                assert_eq!(std::fs::read(root.join("persisted.txt"))?, bytes.data);
+                assert_eq!(
+                    committed_entry(&root.join("persisted.txt"))?,
+                    Some(baseline.local)
+                );
+            }
+            _ => bail!("Unknown restart test phase"),
+        }
+        return Ok(());
+    }
+
+    let temp = tempfile::tempdir_in(fixtures)?;
+    let root = temp.path().join("CloudFiles");
+    std::fs::create_dir(&root)?;
+    let _cleanup = Cleanup(Config {
+        local_folder: root.clone(),
+        username: "process-restart@example.org".into(),
+        files_on_demand: true,
+        ..Config::default()
+    });
+    for phase in ["prepare", "restart"] {
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args([
+                "--ignored",
+                "--exact",
+                "cloud::windows::tests::native_registration_survives_process_restart",
+                "--test-threads=1",
+            ])
+            .env("FILENODE_TEST_RESTART_ROOT", &root)
+            .env("FILENODE_TEST_RESTART_PHASE", phase)
+            .env("FILENODE_LOG", "off")
+            .output()?;
+        assert!(
+            output.status.success(),
+            "Restart phase {phase} failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "Exercises Windows Runtime root queries across short-lived worker threads"]
+fn native_root_queries_survive_worker_restarts() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let config = Config {
+        local_folder: temp.path().to_owned(),
+        username: "no-account-access@example.org".into(),
+        ..Config::default()
+    };
+    for iteration in 0..32 {
+        let config = config.clone();
+        std::thread::spawn(move || -> Result<()> {
+            for _ in 0..4 {
+                assert!(!is_registered(&config)?);
+                validate_root(&config)?;
+            }
+            Ok(())
+        })
+        .join()
+        .expect("Root query worker panicked")?;
+        if iteration == 0 {
+            // Real retries leave enough idle time for COM's unused-DLL sweep.
+            // A tight loop alone can hide a stale cached Windows factory.
+            std::thread::sleep(std::time::Duration::from_secs(15));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "Migrates legacy metadata marked as another provider's real Cloud Files placeholders"]
+fn native_migration_accepts_cloud_tags_without_following_redirects() -> Result<()> {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts/cloud-tests");
+    std::fs::create_dir_all(&fixtures)?;
+    let temp = tempfile::tempdir_in(fixtures)?;
+    let root = temp.path().join("OtherCloud");
+    let selected = root.join("Documents");
+    std::fs::create_dir_all(&selected)?;
+    let config = Config {
+        local_folder: selected.clone(),
+        username: "migration@example.org".into(),
+        ..Config::default()
+    };
+    let legacy = selected.join(crate::filesystem::PRIVATE_DIR);
+    {
+        let store = crate::store::Store::open(&config)?;
+        std::fs::create_dir_all(legacy.join("history"))?;
+        std::fs::write(
+            legacy.join("history/previous.txt"),
+            b"previous local contents",
+        )?;
+        store.set_meta("migration_marker", &"retained")?;
+        store.db.execute(
+            "VACUUM INTO ?1",
+            [legacy.join("state.sqlite").to_string_lossy().as_ref()],
+        )?;
+    }
+    std::fs::remove_file(config.private_directory()?.join("state.sqlite"))?;
+    let other = Config {
+        local_folder: root,
+        files_on_demand: true,
+        ..config.clone()
+    };
+    let _cleanup = Cleanup(other.clone());
+    let _provider = Provider::connect(&other, Arc::new(MemoryBytes::default()))?;
+    for path in [&legacy, &legacy.join("state.sqlite")] {
+        let file = Protected::open(path, true)?;
+        let lease = Lease::new(&file)?;
+        let identity = b"another-provider-owned-placeholder";
+        unsafe {
+            CfConvertToPlaceholder(
+                lease.raw(),
+                Some(identity.as_ptr().cast()),
+                identity.len() as u32,
+                CF_CONVERT_FLAG_MARK_IN_SYNC,
+                None,
+                None,
+            )?;
+        }
+        assert!(is_cloud_placeholder(path)?);
+        assert!(
+            !is_owned(path)?,
+            "migration must not assume other providers use FileNode's identity"
+        );
+    }
+    assert!(
+        !is_registered(&config)?,
+        "another provider's enclosing root is not our root"
+    );
+    let migrated = crate::store::Store::open(&config)?;
+    assert_eq!(
+        migrated.get_meta::<String>("migration_marker")?.as_deref(),
+        Some("retained")
+    );
+    assert!(!legacy.exists());
+    assert!(
+        walkdir::WalkDir::new(config.private_directory()?.join("history"))
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .any(|entry| entry.file_name() == "previous.txt"
+                && std::fs::read(entry.path()).unwrap() == b"previous local contents")
+    );
+    // A directory junction is a namespace redirect, never a cloud placeholder.
+    assert_eq!(
+        unsafe {
+            CfGetPlaceholderStateFromAttributeTag(
+                FILE_ATTRIBUTE_REPARSE_POINT.0,
+                0xA0000003, // IO_REPARSE_TAG_MOUNT_POINT
+            )
+        },
+        CF_PLACEHOLDER_STATE_NO_STATES
+    );
+    Ok(())
+}
+
+#[test]
 #[ignore = "Registers isolated Cloud Files roots to test mixed full-sync/cloud profiles"]
 fn mixed_profiles_validate_and_register_only_enabled_folders() -> Result<()> {
     use crate::config::SyncFolder;

@@ -10,3 +10,5 @@
 *.css text eol=lf
 *.html text eol=lf
 *.py text eol=lf
+apps/linux/filenode-ui text eol=lf
+apps/linux/gnome/filenode-gnome text eol=lf

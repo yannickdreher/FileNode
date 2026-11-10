@@ -63,11 +63,18 @@ struct Args {
     /// Refuse removal while registered cloud folders could need this provider.
     #[arg(long, hide = true)]
     check_uninstall: bool,
+    /// Linux file-manager action: status, pin or evict
+    #[arg(long, requires = "cloud_path", value_parser = ["status", "pin", "evict"])]
+    cloud_action: Option<String>,
+    #[arg(long, requires = "cloud_action")]
+    cloud_path: Option<PathBuf>,
 }
 
 fn main() -> Result<()> {
     filenode::logger::init();
     let result = run();
+    #[cfg(target_os = "linux")]
+    filenode::cloud::shutdown();
     if let Err(error) = &result {
         filenode::logger::event(
             filenode::logger::Level::Error,
@@ -82,6 +89,18 @@ fn main() -> Result<()> {
 
 fn run() -> Result<()> {
     let args = Args::parse();
+    if let Some(action) = args.cloud_action {
+        #[cfg(target_os = "linux")]
+        {
+            println!(
+                "{}",
+                filenode::cloud::command(&action, args.cloud_path.as_deref().unwrap())?
+            );
+            return Ok(());
+        }
+        #[cfg(not(target_os = "linux"))]
+        anyhow::bail!("Cloud file-manager actions require Linux: {action}");
+    }
     if args.check_uninstall {
         #[cfg(windows)]
         filenode::cloud::check_uninstall()?;

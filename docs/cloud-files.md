@@ -1,6 +1,6 @@
 # Windows Files On-Demand
 
-Windows builds can register individual folders as native Cloud Files sync roots. In **Sync and backup**, enable **Files On-Demand (Windows Explorer)** on the card of the folder you want to use. The choice applies only to that folder: other selections can continue full local synchronization. A full-sync folder is not registered with Explorer and does not receive FileNode's availability column or cloud-file context menus. New folders default to full local synchronization; enabling Cloud Files does not automatically evict existing files. Older profile-wide settings are converted into explicit per-folder choices when the profile is loaded. Linux continues using complete local files.
+Windows builds can register individual folders as native Cloud Files sync roots. In **Sync and backup**, enable **Files On-Demand (Windows Explorer)** on the card of the folder you want to use. The choice applies only to that folder: other selections can continue full local synchronization. A full-sync folder is not registered with Explorer and does not receive FileNode's availability column or cloud-file context menus. New folders default to full local synchronization; enabling Cloud Files does not automatically evict existing files. Older profile-wide settings are converted into explicit per-folder choices when the profile is loaded. Linux provides a separate [FUSE provider and native GNOME/KDE integrations](linux-cloud-files.md), with a different mount lifecycle.
 
 Use an existing, dedicated **local NTFS folder**, outside OneDrive and other cloud providers. Windows prohibits overlapping sync roots. An ordinary folder such as `%USERPROFILE%\FileNode\Documents` is suitable; a redirected Documents folder inside OneDrive is not. FileNode reports the conflicting provider before saving the setting. No administrator rights, certificate import, custom filesystem driver or system service is required.
 
@@ -28,6 +28,8 @@ Network errors, cancellation and power policy interrupt requests without marking
 
 One account session shares its HTTP connection pool across folders, uploads and hydration requests. Folder errors retain that session and respect their own retry deadlines; they do not restart discovery or the push connection in a tight loop. Transfer handles do not retain a replaced push worker. A refreshed account session is applied to subsequent cloud requests, while each already running request keeps its immutable blob version.
 
+Windows Runtime activation factories are cached for the process lifetime. A single process-wide MTA reference keeps their shell dependencies alive across short-lived workers and retry gaps; per-thread initialization remains balanced. Ordinary full-sync checks use the Cloud Filter's native root identity instead of creating Windows Storage objects on every retry. A different provider's enclosing root does not count as a FileNode registration.
+
 ## State, stopping sync and uninstalling
 
 Both Cloud Files and full synchronization store databases, transfer staging and overwrite history outside the managed root in the per-user local FileNode data directory under `roots/<folder-key>`. Existing `.filenode` directories and older `cloud/<root-key>` stores are automatically migrated on the first sync, preserving consistent SQLite baselines and recovery copies before removing the old directories. Cross-volume history is also kept externally; download publication can use a short-lived excluded sibling file. See [local state and migration](local-state.md). Do not delete state directories to repair sync.
@@ -36,7 +38,7 @@ Before **Stop sync** or disabling Files On-Demand, choose **Always keep on this 
 
 ## Validation
 
-Windows CI runs real Cloud Files operations in isolated NTFS fixtures with an in-memory JMAP model. It covers metadata-only population, hydration/eviction, dirty-file protection, uploaded-file conversion, remote replacement, renames without content downloads, local/server trash, recursive pinning, database migration, re-enabling, provider restart and lossless detach. Loopback HTTP tests additionally cover exact ranges, ignored Range, invalid ranges and cancellation before sending.
+Windows CI runs real Cloud Files operations in isolated NTFS fixtures with an in-memory JMAP model. It covers metadata-only population, hydration/eviction, dirty-file protection, uploaded-file conversion, remote replacement, renames without content downloads, local/server trash, recursive pinning, database migration (including legacy metadata carrying another provider's cloud tags), re-enabling, worker-thread restart/idle gaps and lossless detach. A two-process test leaves a registration and legacy database behind, then verifies migration, baseline retention, reconnection and hydration in a fresh process, exercising the startup sequence after an update. Loopback HTTP tests additionally cover exact ranges, ignored Range, invalid ranges and cancellation before sending.
 
 Run native tests explicitly (the Cloud Files driver must already be running locally):
 

@@ -23,6 +23,12 @@ Get-WinEvent -LogName Application -FilterXPath "*[System[Provider[@Name='FileNod
         @{ Name='Details'; Expression={ $_.Properties.Value -join ' | ' } }
 ```
 
+### Native process crashes
+
+A Windows **Application Error** (event 1000) or **Windows Error Reporting** entry for `filenode-core.exe` is a process crash, separate from a FileNode folder-retry event. Include the installed FileNode version, crash time, exception code, module name/version and fault offset when reporting it. An access violation such as `0xc0000005` in a Windows DLL is not a Rust `Result` error; normal folder retry logging cannot recover from it.
+
+For Windows Storage crashes, note whether the process failed at startup, when applying folder settings, or after idle/retry periods. Isolated native tests exercise worker lifetimes and registration checks, but passing them does not reproduce or establish the cause of every Windows DLL crash. Windows may already have removed the temporary dump named in a WER report; the report text alone does not contain the failing thread's stack.
+
 ## Linux
 
 The worker sends native structured datagrams to `/run/systemd/journal/socket`, with `SYSLOG_IDENTIFIER=filenode`, severity and `FILENODE_EVENT_ID`. If that fails, it falls back to the local `/dev/log` syslog socket. Datagram sends are nonblocking; no daemon or libsystemd dependency is added.

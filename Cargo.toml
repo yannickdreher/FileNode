@@ -43,6 +43,8 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Storage_Clo
 winreg = { version = "0.55", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+fuser = { version = "0.18", default-features = false }
+libc = "0.2"
 keyring = { version = "3.6", features = ["sync-secret-service", "crypto-rust"], optional = true }
 
 [dev-dependencies]

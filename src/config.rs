@@ -76,8 +76,10 @@ mod tests {
         };
         assert!(config.has_cloud_folders());
         assert!(config.folder_configs().unwrap()[0].files_on_demand);
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         assert!(config.validate_account().is_err());
+        #[cfg(any(windows, target_os = "linux"))]
+        assert!(config.validate_account().is_ok());
     }
 }
 
@@ -182,8 +184,8 @@ impl Config {
         self.validate_folders()
     }
     pub fn validate_account(&self) -> Result<()> {
-        if self.has_cloud_folders() && !cfg!(windows) {
-            bail!("Files On-Demand requires Windows; Linux uses fully local synchronization");
+        if self.has_cloud_folders() && !cfg!(any(windows, target_os = "linux")) {
+            bail!("Files On-Demand requires Windows or Linux");
         }
         crate::exclusions::Exclusions::new(&self.exclude_patterns)?;
         let url = Url::parse(&self.server).context("Invalid server URL")?;

@@ -18,7 +18,7 @@ pub struct Store {
 
 impl Store {
     pub fn open(config: &Config) -> Result<Self> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if !config.files_on_demand && crate::cloud::is_registered(config)? {
             bail!("This folder is still registered for Files On-Demand. Disable it in FileNode first, after making every file available locally.");
         }

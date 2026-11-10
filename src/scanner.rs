@@ -130,7 +130,7 @@ impl Signals {
 }
 
 pub struct LocalScanner {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     cloud: Option<crate::cloud::Provider>,
     root: PathBuf,
     cache: HashMap<String, (Fingerprint, LocalEntry)>,
@@ -161,7 +161,7 @@ impl LocalScanner {
             })
             .ok();
         Self {
-            #[cfg(windows)]
+            #[cfg(any(windows, target_os = "linux"))]
             cloud: None,
             root,
             cache: HashMap::new(),
@@ -191,7 +191,7 @@ impl LocalScanner {
         config: &crate::config::Config,
         remote: &dyn crate::jmap::Remote,
     ) -> Result<()> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if config.files_on_demand {
             let downloader = remote
                 .downloader()
@@ -200,9 +200,18 @@ impl LocalScanner {
                 provider.set_downloader(downloader);
             } else {
                 self.cloud = Some(crate::cloud::Provider::connect(config, downloader)?);
+                #[cfg(target_os = "linux")]
+                if let Some(watcher) = &mut self._watcher {
+                    // The old watch referred to the covered empty directory.
+                    // Subscribe to the mounted inode so local writes wake sync.
+                    let _ = watcher.unwatch(&self.root);
+                    if watcher.watch(&self.root, RecursiveMode::Recursive).is_err() {
+                        self.signals.failed.store(true, Ordering::Relaxed);
+                    }
+                }
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(not(any(windows, target_os = "linux")))]
         let _ = (config, remote);
         Ok(())
     }
@@ -213,7 +222,7 @@ impl LocalScanner {
         node: &crate::model::Node,
         local: Option<&LocalEntry>,
     ) -> Result<LocalEntry> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if let Some(provider) = &self.cloud {
             return provider.publish(path, node, local);
         }
@@ -224,7 +233,7 @@ impl LocalScanner {
     }
 
     pub fn cloud_availability(&self) -> Result<()> {
-        #[cfg(windows)]
+        #[cfg(any(windows, target_os = "linux"))]
         if let Some(provider) = &self.cloud {
             provider.availability()?;
         }

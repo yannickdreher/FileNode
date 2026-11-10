@@ -26,9 +26,9 @@
       "environment": [{"name": "RUST_BACKTRACE", "value": "1"}]
     },
     {
-      "name": "FileNode: Linux Qt (GDB)",
+      "name": "FileNode: Linux KDE (GDB)",
       "type": "cppdbg", "request": "launch",
-      "program": "${workspaceFolder}/target/debug/filenode-ui",
+      "program": "${workspaceFolder}/target/debug/filenode-kde",
       "args": ["--config", "${workspaceFolder}/.dev/profile.toml", "--settings", "--no-tray"],
       "cwd": "${workspaceFolder}", "MIMode": "gdb",
       "preLaunchTask": "filenode: Linux desktop"

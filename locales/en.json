@@ -1,4 +1,11 @@
 {
+  "error.command_queue": "Too many pending changes. Wait for the current operation and try again.",
+  "settings.add_cloud_folder": "Add cloud folder",
+  "settings.linux_files_on_demand": "Files On-Demand (Linux)",
+  "settings.linux_cloud_hint": "Use an empty, dedicated folder for a Linux cloud mount. Files appear while FileNode is running. Offline contents stay in the private cache. Keep all files on this device before stopping cloud sync.",
+  "settings.gnome_background_hint": "FileNode keeps running when you close its window. Open it again from the application launcher. GNOME does not provide a tray by default.",
+  "settings.folder_actions": "Folder actions",
+  "error.worker_stopped": "The synchronization process stopped. Restart FileNode to reconnect.",
   "activity.online_only": "Available online · downloads when opened",
   "settings.files_on_demand": "Files On-Demand (Windows Explorer)",
   "settings.files_on_demand_hint": "Enable Files On-Demand separately for each folder to see server files, availability status and keep/free-space menus in Explorer. That folder must use NTFS and be outside OneDrive or other cloud providers. Other folders can continue using full local synchronization. Keep FileNode running to open online-only files. Before disabling or stopping sync, keep the entire folder on this device and wait for downloads to finish.",

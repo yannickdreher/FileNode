@@ -54,15 +54,18 @@ Rust 1.98.1 über rustup installieren. Unter Debian/Ubuntu werden beispielsweise
 
 ```sh
 sudo apt install build-essential pkg-config libdbus-1-dev cmake ninja-build gdb \
+  fuse3 libfuse3-dev libkf6kio-dev libkf6coreaddons-dev extra-cmake-modules \
+  python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-nautilus librsvg2-common \
+  qml6-module-org-kde-kirigami qml6-module-org-kde-desktop qt6-svg-plugins \
   qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window \
   qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs \
   qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript
 sh scripts/build-linux.sh
 ```
 
-Für gespeicherte Passwörter einen entsperrten Secret Service verwenden, etwa GNOME Keyring oder passend eingerichtetes KDE Wallet. KDE-Stil-/Integrationspakete sind optional. Für das Tray braucht die Desktop-Sitzung einen StatusNotifier-Host; unter GNOME gegebenenfalls eine Erweiterung installieren.
+Für gespeicherte Passwörter einen entsperrten Secret Service verwenden. Die neue Linux-Basis ist Debian 13 mit GTK/libadwaita, Kirigami/KF6 und FUSE. GNOME nutzt GTK und den Anwendungsstarter; KDE verwendet Kirigami und StatusNotifier. Siehe [Linux-Einrichtung](linux-cloud-files.md).
 
-**FileNode: Linux Qt (GDB)** startet die Oberfläche zum Debuggen ohne Tray. **FileNode: Rust core Linux (GDB)** startet den Headless-Kern mit einem Testprofil. Diese Profile nutzen das normale Cargo-Zielverzeichnis; bei geändertem `CARGO_TARGET_DIR` die Pfade entsprechend anpassen.
+**FileNode: Linux KDE (GDB)** startet die Oberfläche zum Debuggen ohne Tray. **FileNode: Rust core Linux (GDB)** startet den Headless-Kern mit einem Testprofil. Diese Profile nutzen das normale Cargo-Zielverzeichnis; bei geändertem `CARGO_TARGET_DIR` die Pfade entsprechend anpassen.
 
 ## Tests ohne Konto
 
