@@ -385,15 +385,7 @@ pub fn sync_with_scanner<R: Remote>(
                     report.downloaded += 1;
                     continue;
                 }
-                let staged = jmap::transfer_path(&config.local_folder, node);
-                let staged = if config.files_on_demand {
-                    config
-                        .private_directory()?
-                        .join("transfers")
-                        .join(staged.file_name().context("Transfer name")?)
-                } else {
-                    staged
-                };
+                let staged = jmap::transfer_path(&config.private_directory()?, node);
                 remote.download(node, &staged)?;
                 let incoming = disk::hash_file(&staged, config.file_limit())?;
                 check_state(remote, &snapshot.state)?;

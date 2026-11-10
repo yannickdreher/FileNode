@@ -11,11 +11,84 @@ pub enum AuthMode {
     Browser,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_cloud_profiles_gain_explicit_folder_modes_and_new_roots_default_to_full_sync() {
+        let temp = tempfile::tempdir().unwrap();
+        let a = temp.path().join("Cloud");
+        let b = temp.path().join("Full");
+        let c = temp.path().join("New");
+        for path in [&a, &b, &c] {
+            std::fs::create_dir(path).unwrap();
+        }
+        let profile = temp.path().join("profile.toml");
+        let old = Config {
+            files_on_demand: true,
+            sync_folders: Some(vec![
+                SyncFolder {
+                    local_folder: a,
+                    remote_path: "Cloud".into(),
+                    files_on_demand: None,
+                },
+                SyncFolder {
+                    local_folder: b,
+                    remote_path: "Full".into(),
+                    files_on_demand: Some(false),
+                },
+            ]),
+            ..Config::default()
+        };
+        old.save(&profile).unwrap();
+        let mut loaded = Config::load(&profile).unwrap();
+        assert!(!loaded.files_on_demand);
+        assert!(loaded.has_cloud_folders());
+        let roots = loaded.folder_configs().unwrap();
+        assert!(roots[0].files_on_demand);
+        assert!(!roots[1].files_on_demand);
+        loaded.sync_folders.as_mut().unwrap().push(SyncFolder {
+            local_folder: c,
+            remote_path: "New".into(),
+            files_on_demand: None,
+        });
+        loaded.resolve_folder_paths().unwrap();
+        assert!(!loaded.folder_configs().unwrap()[2].files_on_demand);
+        loaded.save(&profile).unwrap();
+        assert_eq!(
+            Config::load(&profile).unwrap().sync_folders,
+            loaded.sync_folders
+        );
+    }
+
+    #[test]
+    fn per_folder_modes_are_independent_of_the_legacy_global_switch() {
+        let config = Config {
+            username: "user@example.org".into(),
+            files_on_demand: false,
+            sync_folders: Some(vec![SyncFolder {
+                local_folder: PathBuf::from("ignored"),
+                remote_path: "Cloud".into(),
+                files_on_demand: Some(true),
+            }]),
+            ..Config::default()
+        };
+        assert!(config.has_cloud_folders());
+        assert!(config.folder_configs().unwrap()[0].files_on_demand);
+        #[cfg(not(windows))]
+        assert!(config.validate_account().is_err());
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncFolder {
     pub local_folder: PathBuf,
     #[serde(default)]
     pub remote_path: String,
+    /// None inherits the legacy profile-wide setting until the profile is loaded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_on_demand: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -50,7 +123,7 @@ pub struct Config {
     pub pause_on_power_saver: bool,
     pub autostart: bool,
     /// Windows Cloud Files placeholders and Explorer availability controls.
-    /// Opt-in preserves existing fully local roots on upgrade.
+    /// Per-engine mode; also reads the legacy profile-wide setting on upgrade.
     pub files_on_demand: bool,
     pub propagate_deletes: bool,
     /// Batch limits apply to server-driven removals of local working copies.
@@ -109,7 +182,7 @@ impl Config {
         self.validate_folders()
     }
     pub fn validate_account(&self) -> Result<()> {
-        if self.files_on_demand && !cfg!(windows) {
+        if self.has_cloud_folders() && !cfg!(windows) {
             bail!("Files On-Demand requires Windows; Linux uses fully local synchronization");
         }
         crate::exclusions::Exclusions::new(&self.exclude_patterns)?;
@@ -179,10 +252,14 @@ impl Config {
         }
         if let Some(folders) = &mut self.sync_folders {
             for folder in folders {
+                folder.files_on_demand.get_or_insert(self.files_on_demand);
                 if folder.remote_path.is_empty() {
                     folder.remote_path = Self::derive_remote_path(&folder.local_folder, &home)?;
                 }
             }
+            // Persist explicit per-folder choices; never let a legacy global
+            // switch silently enable Cloud Files for a newly added folder.
+            self.files_on_demand = false;
         }
         Ok(())
     }
@@ -267,10 +344,21 @@ impl Config {
                 let mut config = self.clone();
                 config.local_folder = folder.local_folder.clone();
                 config.resolved_remote_path = folder.remote_path.clone();
+                config.files_on_demand = folder.files_on_demand.unwrap_or(self.files_on_demand);
                 config.sync_folders = None;
                 Ok(config)
             })
             .collect()
+    }
+
+    pub fn has_cloud_folders(&self) -> bool {
+        self.sync_folders
+            .as_ref()
+            .map_or(self.files_on_demand, |folders| {
+                folders
+                    .iter()
+                    .any(|folder| folder.files_on_demand.unwrap_or(self.files_on_demand))
+            })
     }
 
     pub fn validate_folders(&self) -> Result<()> {
@@ -327,15 +415,27 @@ impl Config {
     }
 
     pub fn private_directory(&self) -> Result<PathBuf> {
-        if self.files_on_demand {
-            Ok(directories::ProjectDirs::from("", "", "FileNode")
-                .context("Local application data directory unavailable")?
-                .data_local_dir()
-                .join("cloud")
-                .join(crate::cloud::root_key(self)?))
-        } else {
-            Ok(self.local_folder.join(crate::filesystem::PRIVATE_DIR))
-        }
+        // A root has one database across full-sync and Cloud Files modes. Keep
+        // the key independent of account settings so the stored identity still
+        // prevents accidentally rebinding existing files to another account.
+        use sha2::{Digest, Sha256};
+        let path = serde_json::to_vec(&self.local_folder.canonicalize()?)?;
+        Ok(Self::local_data_directory()?
+            .join("roots")
+            .join(hex::encode(Sha256::digest(path))))
+    }
+
+    pub(crate) fn legacy_cloud_directory(&self) -> Result<PathBuf> {
+        Ok(Self::local_data_directory()?
+            .join("cloud")
+            .join(crate::cloud::root_key(self)?))
+    }
+
+    pub fn local_data_directory() -> Result<PathBuf> {
+        Ok(directories::ProjectDirs::from("", "", "FileNode")
+            .context("Local application data directory unavailable")?
+            .data_local_dir()
+            .to_owned())
     }
 
     /// Zero means no additional user size cap. Uploads still obey discovery.

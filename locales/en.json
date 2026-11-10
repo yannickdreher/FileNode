@@ -1,7 +1,7 @@
 {
   "activity.online_only": "Available online · downloads when opened",
   "settings.files_on_demand": "Files On-Demand (Windows Explorer)",
-  "settings.files_on_demand_hint": "See all server files in Explorer and download content when opening a file. Right-click to keep files on this device or free up space. Use a separate NTFS folder outside OneDrive or other cloud providers. Keep FileNode running to open online-only files. Before disabling or stopping sync, keep the entire folder on this device and wait for downloads to finish.",
+  "settings.files_on_demand_hint": "Enable Files On-Demand separately for each folder to see server files, availability status and keep/free-space menus in Explorer. That folder must use NTFS and be outside OneDrive or other cloud providers. Other folders can continue using full local synchronization. Keep FileNode running to open online-only files. Before disabling or stopping sync, keep the entire folder on this device and wait for downloads to finish.",
   "language.label": "Language",
   "language.auto": "System language",
   "nav.storage": "YOUR FILE STORAGE",

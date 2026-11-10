@@ -42,6 +42,102 @@ impl Drop for Cleanup {
         }
     }
 }
+
+#[test]
+#[ignore = "Registers isolated Cloud Files roots to test mixed full-sync/cloud profiles"]
+fn mixed_profiles_validate_and_register_only_enabled_folders() -> Result<()> {
+    use crate::config::SyncFolder;
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("artifacts/cloud-tests");
+    std::fs::create_dir_all(&fixtures)?;
+    let temp = tempfile::tempdir_in(fixtures)?;
+    let other = temp.path().join("AnotherCloud");
+    let full = other.join("Documents");
+    let cloud = temp.path().join("Videos");
+    std::fs::create_dir_all(&full)?;
+    std::fs::create_dir(&cloud)?;
+    let other_config = Config {
+        local_folder: other,
+        username: "test@example.org".into(),
+        files_on_demand: true,
+        ..Config::default()
+    };
+    let _other_cleanup = Cleanup(other_config.clone());
+    let bytes = Arc::new(Bytes {
+        data: Vec::new(),
+        requests: AtomicUsize::new(0),
+        fail_after: AtomicUsize::new(0),
+        offsets: Mutex::new(Vec::new()),
+    });
+    let _other_provider = Provider::connect(&other_config, bytes)?;
+    let mut profile = Config {
+        username: "test@example.org".into(),
+        file_settle_seconds: 0,
+        sync_folders: Some(vec![
+            SyncFolder {
+                local_folder: full.clone(),
+                remote_path: "Documents".into(),
+                files_on_demand: Some(false),
+            },
+            SyncFolder {
+                local_folder: cloud.clone(),
+                remote_path: "Videos".into(),
+                files_on_demand: Some(true),
+            },
+        ]),
+        ..Config::default()
+    };
+    profile.validate()?;
+    let mut before = profile.clone();
+    before.sync_folders.as_mut().unwrap()[1].files_on_demand = Some(false);
+    assert!(removed_roots(&before, &profile)?.is_empty());
+    let roots = profile.folder_configs()?;
+    let _cloud_cleanup = Cleanup(roots[1].clone());
+    let mut invalid = profile.clone();
+    invalid.sync_folders.as_mut().unwrap()[0].files_on_demand = Some(true);
+    assert!(
+        removed_roots(&profile, &invalid).is_err(),
+        "enabled roots must still reject overlaps"
+    );
+    std::fs::write(full.join("local.txt"), b"full local sync")?;
+    let mut remote = MemoryRemote::default();
+    let videos = remote.seed("Videos", None, None);
+    remote.seed("remote.txt", Some(&videos.id), Some("cloud contents"));
+    let mut group = crate::group::SyncGroup::new(&profile)?;
+    let report = group.poll(&mut remote, &AtomicBool::new(false), &mut |_| {})?;
+    assert_eq!(report.failed_folders, 0);
+    assert_eq!(report.uploaded, 1);
+    assert!(
+        !is_registered(&roots[0])?,
+        "a full-sync folder was registered as cloud storage"
+    );
+    assert!(is_registered(&roots[1])?);
+    assert!(is_registered(&other_config)?);
+    assert!(is_owned(&cloud.join("remote.txt"))?);
+    assert_eq!(
+        remote.downloads, 0,
+        "an online-only placeholder was downloaded eagerly"
+    );
+    let mut disabled = profile.clone();
+    disabled.sync_folders.as_mut().unwrap()[1].files_on_demand = Some(false);
+    assert!(
+        removed_roots(&profile, &disabled).is_err(),
+        "online-only contents must be kept before disabling"
+    );
+    assert_eq!(std::fs::read(cloud.join("remote.txt"))?, b"cloud contents");
+    drop(group);
+    let removed = removed_roots(&profile, &disabled)?;
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].local_folder, cloud);
+    detach(&removed[0])?;
+    assert!(!is_registered(&roots[1])?);
+    assert!(
+        is_registered(&other_config)?,
+        "unrelated cloud root was detached"
+    );
+    profile.sync_folders.as_mut().unwrap()[1].files_on_demand = Some(false);
+    assert!(!profile.has_cloud_folders());
+    Ok(())
+}
 #[derive(Default)]
 struct MemoryRemote {
     nodes: Vec<Node>,
@@ -400,6 +496,10 @@ fn native_cloud_sync_round_trip_and_detach() -> Result<()> {
     detach(&config).context("Materialize and detach")?;
     assert!(!is_owned(&root.join("server-renamed.txt"))?);
     config.files_on_demand = false;
+    assert!(
+        !root.join(crate::filesystem::PRIVATE_DIR).exists(),
+        "detachment recreated root-local state"
+    );
     let mut store = crate::store::Store::open(&config)?;
     let mut scanner = crate::scanner::LocalScanner::new(&root, 900);
     let report = run(&config, &mut store, &mut remote, &mut scanner)?;

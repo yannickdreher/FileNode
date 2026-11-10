@@ -1,7 +1,7 @@
 {
   "activity.online_only": "Online verfügbar · Download beim Öffnen",
   "settings.files_on_demand": "Dateien bei Bedarf (Windows-Explorer)",
-  "settings.files_on_demand_hint": "Alle Serverdateien im Explorer sehen und Inhalte beim Öffnen herunterladen. Per Rechtsklick Dateien auf diesem Gerät behalten oder Speicherplatz freigeben. Verwende einen eigenen NTFS-Ordner außerhalb von OneDrive oder anderen Cloud-Anbietern. FileNode muss zum Öffnen reiner Onlinedateien laufen. Vor dem Deaktivieren oder Beenden der Ordnersynchronisation den gesamten Ordner auf diesem Gerät behalten und alle Downloads abwarten.",
+  "settings.files_on_demand_hint": "Dateien bei Bedarf lässt sich für jeden Ordner getrennt aktivieren. Dann zeigt der Explorer Serverdateien, Verfügbarkeitsstatus und Kontextmenüs zum Behalten oder Freigeben von Speicherplatz. Dafür muss dieser Ordner auf NTFS und außerhalb von OneDrive oder anderen Cloud-Anbietern liegen. Andere Ordner können weiterhin vollständig lokal synchronisiert werden. FileNode muss zum Öffnen reiner Onlinedateien laufen. Vor dem Deaktivieren oder Beenden der Ordnersynchronisation den gesamten Ordner auf diesem Gerät behalten und alle Downloads abwarten.",
   "language.label": "Sprache",
   "language.auto": "Systemsprache",
   "nav.storage": "DEIN DATEISPEICHER",

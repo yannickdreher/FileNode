@@ -21,9 +21,6 @@ download_limit_kib = 0
 file_settle_seconds = 2
 pause_on_power_saver = true
 autostart = false
-# Windows only: Explorer placeholders, download on open and native pin/free-space menus.
-# Use a separate local NTFS folder outside other cloud providers. See docs/cloud-files.md.
-files_on_demand = false
 propagate_deletes = true
 max_delete_count = 20
 max_delete_percent = 25
@@ -39,7 +36,12 @@ device_name = "Desktop"
 # Each selection uses its own final folder name at the server root. Overlapping roots are rejected.
 [[sync_folders]]
 local_folder = "/home/user/Desktop" # Windows: 'C:\Users\user\Desktop'
+# Windows only: enable on each dedicated NTFS root outside other cloud providers.
+# Adds Explorer placeholders, availability status and native pin/free-space menus.
+# Other selections can remain fully local. See docs/cloud-files.md.
+files_on_demand = false
 
 [[sync_folders]]
 local_folder = "/home/user/Documents/Büro" # Windows: 'C:\Users\user\Documents\Büro'
+files_on_demand = false
 # remote_path is derived automatically when omitted; it is not a user-facing option.

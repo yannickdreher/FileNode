@@ -1,4 +1,4 @@
-use crate::{config::Config, filesystem::PRIVATE_DIR, model::*};
+use crate::{config::Config, model::*};
 use anyhow::{bail, Context, Result};
 use fs2::FileExt;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -7,6 +7,9 @@ use std::{
     fs::{self, File, OpenOptions},
     path::Path,
 };
+
+mod migration;
+pub(crate) use migration::{copy_recovery_tree, remove_recovered_tree};
 
 pub struct Store {
     pub db: Connection,
@@ -32,7 +35,7 @@ impl Store {
                 }
             }
         }
-        fs::create_dir_all(&folder)?;
+        ensure_state_directory(&folder)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -46,44 +49,15 @@ impl Store {
             .open(folder.join("lock"))?;
         lock.try_lock_exclusive()
             .context("Another FileNode process is using this folder")?;
-        let detached = if config.files_on_demand && folder.join("state.sqlite").exists() {
-            let previous = Connection::open(folder.join("state.sqlite"))?;
-            previous
-                .query_row(
-                    "SELECT value FROM meta WHERE key='cloud_detached'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?
-                .as_deref()
-                == Some("true")
-        } else {
-            false
-        };
-        if config.files_on_demand && (!folder.join("state.sqlite").exists() || detached) {
-            // Copy a consistent database under the legacy root's exclusive
-            // lock. Keep the original database/history intact for recovery.
-            let legacy = config.local_folder.join(PRIVATE_DIR);
-            if legacy.join("state.sqlite").exists() {
-                ensure_state_directory(&legacy)?;
-                let legacy_lock = OpenOptions::new()
-                    .read(true)
-                    .write(true)
-                    .open(legacy.join("lock"))?;
-                legacy_lock
-                    .try_lock_exclusive()
-                    .context("Stop the previous sync engine before enabling Files On-Demand")?;
-                let source = Connection::open(legacy.join("state.sqlite"))?;
-                let staged = tempfile::NamedTempFile::new_in(&folder)?.into_temp_path();
-                fs::remove_file(&staged)?;
-                source.execute("VACUUM INTO ?1", [staged.to_string_lossy().as_ref()])?;
-                if folder.join("state.sqlite").exists() {
-                    let previous = Connection::open(folder.join("state.sqlite"))?;
-                    previous.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-                }
-                fs::rename(&staged, folder.join("state.sqlite"))?;
-            }
-        }
+        let identity = format!(
+            "{}|{}|{}|{}|{}",
+            config.server.trim_end_matches('/'),
+            config.username,
+            config.account_id.as_deref().unwrap_or(""),
+            config.local_folder.canonicalize()?.display(),
+            config.remote_folder_path()?
+        );
+        migration::migrate(config, &folder, &identity)?;
         let db = Connection::open(folder.join("state.sqlite"))?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -93,14 +67,6 @@ impl Store {
         if config.files_on_demand {
             store.set_meta("cloud_detached", &false)?;
         }
-        let identity = format!(
-            "{}|{}|{}|{}|{}",
-            config.server.trim_end_matches('/'),
-            config.username,
-            config.account_id.as_deref().unwrap_or(""),
-            config.local_folder.canonicalize()?.display(),
-            config.remote_folder_path()?
-        );
         if let Some(previous) = store.get_meta::<String>("identity")? {
             if previous != identity {
                 bail!("This sync folder belongs to a different server, account or remote folder. Select a new local folder.");
@@ -191,10 +157,6 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
-}
-
-pub fn ensure_private_path(root: &Path) -> Result<()> {
-    ensure_state_directory(&root.join(PRIVATE_DIR))
 }
 
 pub fn ensure_state_directory(folder: &Path) -> Result<()> {

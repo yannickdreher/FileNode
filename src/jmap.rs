@@ -1045,15 +1045,13 @@ pub fn scoped_tree(snapshot: &Snapshot, root_id: Option<&str>) -> Result<RemoteT
     Ok(result)
 }
 
-pub fn transfer_path(root: &Path, node: &Node) -> PathBuf {
+pub fn transfer_path(private: &Path, node: &Node) -> PathBuf {
     use sha2::{Digest, Sha256};
     let key = hex::encode(Sha256::digest(format!(
         "{}|{:?}|{}",
         node.id, node.blob_id, node.size
     )));
-    root.join(crate::filesystem::PRIVATE_DIR)
-        .join("transfers")
-        .join(format!("{key}.part"))
+    private.join("transfers").join(format!("{key}.part"))
 }
 
 #[cfg(test)]
