@@ -2,13 +2,13 @@
 
 Deutsch · [English](README.md) · [Website](https://yannickdreher.github.io/FileNode/) · [Downloads](https://github.com/yannickdreher/FileNode/releases)
 
-JMAP-Dateisynchronisation für Windows und Linux mit gemeinsamem Rust-Kern. Windows verwendet ein eigenes **WinUI-3-/C#-Projekt**, Linux ein getrenntes **Qt-6-/C++-/QML-Projekt**. Die Oberfläche ist Deutsch/Englisch, Code und technische Diagnosen sind Englisch. Die Versionen 0.x sind Vorabversionen.
+JMAP-Dateisynchronisation mit gemeinsamem Rust-Kern: **WinUI 3/C#** unter Windows, **GTK 4/libadwaita** unter GNOME und **Qt 6/Kirigami** unter KDE. Die Oberfläche ist Deutsch/Englisch, Code und technische Diagnosen sind Englisch. Die Versionen 0.x sind Vorabversionen.
 
 ## Hintergrundbetrieb
 
-Die App läuft im angemeldeten Benutzerkontext mit Tray-Icon, kompakter Aktivitätsansicht und eigenem Einstellungsfenster. Geschlossene Fenster beenden den Abgleich nicht. Erst Beenden stoppt die Anwendung und den Rust-Worker. Ein Windows-Systemdienst oder eine systemd-Unit wird nicht installiert. Unter Linux ist ein StatusNotifier-Host nötig, unter GNOME gegebenenfalls eine AppIndicator-Erweiterung. Ohne Tray das Statusfenster geöffnet oder minimiert lassen.
+Die App läuft im angemeldeten Benutzerkontext. Geschlossene Fenster beenden den Abgleich nicht. Beenden stoppt Anwendung und Rust-Worker. Windows und KDE verwenden ein Tray-Icon; GNOME öffnet die App erneut über den Anwendungsstarter. Ein Windows-Systemdienst oder eine systemd-Unit wird nicht installiert.
 
-Beide Oberflächen teilen Übersetzungen, Profilformat und sämtliche Sync-Regeln. Unter KDE nutzt Qt bei vorhandenen Integrationspaketen den KDE-Desktop-Stil. Unter GNOME ist die Linux-Oberfläche weiterhin Qt und verwendet keine GTK-/libadwaita-Steuerelemente.
+Alle Oberflächen teilen Übersetzungen, Profilformat und Sync-Regeln. Der Linux-Starter wählt GTK/libadwaita unter GNOME und Kirigami unter KDE. [Linux-Einrichtung, FUSE-Lebenszyklus und Dateimanager-Erweiterungen](docs/linux-cloud-files.md).
 
 ## Funktionen
 
@@ -51,7 +51,7 @@ powershell.exe -NoProfile -File scripts/build-windows.ps1
 powershell.exe -NoProfile -File scripts/build-windows.ps1 -Configuration Release -Package
 ```
 
-Linux mit Qt 6.4+ samt Entwicklungs- und QML-Laufzeitmodulen:
+Linux mit GTK/libadwaita, Kirigami/KF6 und FUSE gemäß [Linux-Einrichtung](docs/linux-cloud-files.md):
 
 ```sh
 sh scripts/build-linux.sh
@@ -80,7 +80,7 @@ Headless werden absolute Ordnerpfade benötigt. Browser-Profile verwenden und er
 
 ## Grenzen und Wiederherstellung
 
-Dateien bei Bedarf stehen unter Windows optional in eigenen NTFS-Ordnern außerhalb anderer Cloud-Anbieter bereit; Linux verwendet vollständige lokale Kopien. Noch offen sind blockweise Upload-Deltas, Upload-Fortsetzung ab beliebiger Byteposition, selektive Synchronisation, Mehrkonten-Oberfläche, Konflikt-/Wiederherstellungsdialoge, signierte Releases und automatische Updates. Blob-Uploads können parallel laufen; vollständige Downloads und Änderungen an FileNodes bleiben seriell; Windows-Abrufe benötigter Dateibereiche können parallel laufen. Automatisch gilt das Uploadlimit des Servers, bei fehlender Angabe ersatzweise 1 GiB. Weitere Grenzen: 100.000 Einträge, 200 UTF-8-Bytes je Name und 240 je relativem Pfad. Unsichere Links, fremde Reparse Points, unsichere Namen und Namenskollisionen stoppen den Scan. Rechte, Eigentümer, ACLs, alternative Datenströme und Zeitstempel werden nicht synchronisiert. Reine Änderungen der Groß-/Kleinschreibung sind noch nicht zuverlässig unterstützt.
+Dateien bei Bedarf stehen unter Windows optional in eigenen NTFS-Ordnern außerhalb anderer Cloud-Anbieter bereit; Linux bietet zusätzlich FUSE-Dateien bei Bedarf mit Nautilus-/Dolphin-Erweiterungen; der [Mount-Lebenszyklus](docs/linux-cloud-files.md) unterscheidet sich von Windows. Noch offen sind blockweise Upload-Deltas, Upload-Fortsetzung ab beliebiger Byteposition, selektive Synchronisation, Mehrkonten-Oberfläche, Konflikt-/Wiederherstellungsdialoge, signierte Releases und automatische Updates. Blob-Uploads können parallel laufen; vollständige Downloads und Änderungen an FileNodes bleiben seriell; Windows-Abrufe benötigter Dateibereiche können parallel laufen. Automatisch gilt das Uploadlimit des Servers, bei fehlender Angabe ersatzweise 1 GiB. Weitere Grenzen: 100.000 Einträge, 200 UTF-8-Bytes je Name und 240 je relativem Pfad. Unsichere Links, fremde Reparse Points, unsichere Namen und Namenskollisionen stoppen den Scan. Rechte, Eigentümer, ACLs, alternative Datenströme und Zeitstempel werden nicht synchronisiert. Reine Änderungen der Groß-/Kleinschreibung sind noch nicht zuverlässig unterstützt.
 
 Der komplette Namensraum wird weiterhin eingelesen; der Cache spart Inhaltszugriffe. Dateisperren und eine Wartezeit reduzieren Rennen, garantieren aber nicht für jedes Programm das Ende eines Schreibvorgangs. Unix-Sperren sind kooperativ. Bandbreitengrenzen betreffen Nutzdaten, nicht TLS-/HTTP-Overhead und Socket-Puffer. Weitere Grenzen stehen in der [Architektur](docs/architecture.md).
 

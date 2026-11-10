@@ -1,15 +1,15 @@
-//! Windows Cloud Files integration. A placeholder's identity is a committed
+//! Windows Cloud Files and Linux FUSE integration. A placeholder's identity is a committed
 //! snapshot, never evidence that a local edit has reached the server.
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use crate::model::Kind;
 use crate::model::{LocalEntry, Node};
 #[cfg(any(windows, test))]
 use anyhow::bail;
 use anyhow::Result;
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 use std::path::Path;
 
 #[cfg(windows)]
@@ -17,18 +17,23 @@ mod windows;
 #[cfg(windows)]
 pub use windows::*;
 
-#[cfg(any(windows, test))]
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
+pub use linux::*;
+
+#[cfg(any(windows, target_os = "linux", test))]
 const MAGIC: &str = "FileNode.CloudFiles/1";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 struct Identity {
     magic: String,
     root: String,
     node: Node,
     local: LocalEntry,
 }
-#[cfg(any(windows, test))]
+#[cfg(any(windows, target_os = "linux", test))]
 impl Identity {
     fn new(root: &str, node: &Node, local: Option<&LocalEntry>) -> Self {
         Self {
@@ -54,6 +59,7 @@ impl Identity {
             }),
         }
     }
+    #[cfg(any(windows, test))]
     fn encode(&self) -> Result<Vec<u8>> {
         if self.node.size > i64::MAX as u64 {
             bail!("Cloud file size exceeds the Windows limit");
@@ -64,6 +70,7 @@ impl Identity {
         }
         Ok(bytes)
     }
+    #[cfg(any(windows, test))]
     fn decode(bytes: &[u8]) -> Result<Self> {
         if bytes.len() > 4096 {
             bail!("Invalid cloud file identity length");
@@ -93,19 +100,19 @@ pub fn root_key(config: &crate::config::Config) -> Result<String> {
     Ok(hex::encode(Sha256::digest(identity)))
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn committed_entry(_: &Path) -> Result<Option<LocalEntry>> {
     Ok(None)
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn is_owned(_: &Path) -> Result<bool> {
     Ok(false)
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn matches_node(_: &Path, _: &Node, _: &LocalEntry) -> Result<bool> {
     Ok(false)
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn is_registered(_: &crate::config::Config) -> Result<bool> {
     Ok(false)
 }

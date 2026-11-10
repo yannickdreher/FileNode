@@ -73,7 +73,10 @@ void Backend::receive() {
         auto end = m_buffer.indexOf('\n'); auto event = QJsonDocument::fromJson(m_buffer.left(end)).object(); m_buffer.remove(0, end + 1);
         const auto type = event.value("event").toString();
         if (type == "configured") m_error.clear();
-        if (type == "ready" || type == "configured" || event.contains("config")) { m_config = event.value("config").toObject().toVariantMap(); emit configChanged(); }
+        if (type == "ready" || type == "configured" || event.contains("config") || type == "error") {
+            if (event.contains("config")) m_config = event.value("config").toObject().toVariantMap();
+            emit configChanged();
+        }
         if (type == "ready") {
             if (event.value("protocol").toInt() != 4) { m_error = "Incompatible Rust worker protocol"; emit changed(); continue; }
             m_ready = true; publishPower();

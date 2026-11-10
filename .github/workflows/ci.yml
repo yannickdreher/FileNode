@@ -30,14 +30,14 @@ jobs:
     name: Linux core and desktop
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    container: rust:1-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57
+    container: rust:1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7
     env:
       CARGO_BUILD_JOBS: '2'
     steps:
       - name: Install build and desktop test dependencies
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends git ca-certificates build-essential pkg-config libdbus-1-dev cmake ninja-build qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript libgl1-mesa-dri xvfb xauth dbus-x11 python3-dbus python3-gi openbox imagemagick xdotool wmctrl
+          apt-get install -y --no-install-recommends fuse3 libfuse3-dev libkf6kio-dev libkf6coreaddons-dev extra-cmake-modules qml6-module-org-kde-kirigami qml6-module-org-kde-desktop python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-nautilus librsvg2-common qt6-svg-plugins git ca-certificates build-essential pkg-config libdbus-1-dev cmake ninja-build qt6-base-dev qt6-declarative-dev qml6-module-qtquick qml6-module-qtquick-window qml6-module-qtquick-layouts qml6-module-qtquick-controls qml6-module-qtquick-dialogs qml6-module-qtquick-templates qml6-module-qtqml qml6-module-qtqml-workerscript libgl1-mesa-dri xvfb xauth dbus-x11 python3-dbus python3-gi openbox imagemagick xdotool wmctrl
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup component add clippy rustfmt
       - run: cargo fmt --all -- --check
@@ -45,6 +45,12 @@ jobs:
       - run: cargo test --locked --all-targets
       - run: cargo check --locked --no-default-features
       - run: sh scripts/build-linux.sh debug
+      - run: sh scripts/linux-install-smoke.sh
+      - run: sh scripts/gnome-smoke.sh
+      - name: Load native file-manager extensions
+        run: |
+          LANG=C.UTF-8 QT_FATAL_WARNINGS=1 QT_QPA_PLATFORM=offscreen target/debug/linux-ui/integration/filenode-integration-smoke "$PWD/target/debug/integration/filenodeoverlay.so" "$PWD/target/debug/integration/filenodeactions.so"
+          python3 -c 'import runpy; m=runpy.run_path("apps/linux/integration/filenode-nautilus.py"); assert len(m["FileNode"]().get_columns()) == 1'
       - name: Native tray lifecycle
         run: DRIVE_UI="$PWD/target/debug/filenode-ui" DRIVE_CORE="$PWD/target/debug/filenode" dbus-run-session -- sh scripts/desktop-smoke.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -53,6 +59,27 @@ jobs:
           name: linux-ui-check
           path: artifacts/
           retention-days: 14
+
+  linux-cloud:
+    name: Linux native FUSE lifecycle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Prepare FUSE test host
+        run: |
+          test -c /dev/fuse || sudo modprobe fuse
+          test -c /dev/fuse
+      - name: Build native test environment
+        run: docker build -f ci/linux.Dockerfile -t filenode-linux-test ci
+      - name: Exercise real FUSE mounts
+        run: |
+          docker run --rm --device /dev/fuse --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+            -v "$PWD:/workspace" -w /workspace -e CARGO_TARGET_DIR=/tmp/target -e CARGO_BUILD_JOBS=2 \
+            -e XDG_RUNTIME_DIR=/tmp/filenode-runtime filenode-linux-test sh -ec '
+              mkdir -m700 /tmp/filenode-runtime
+              cargo test --locked --lib cloud::linux::tests:: -- --include-ignored --test-threads=1
+              cargo test --locked --test synchronization linux_cloud_engine -- --ignored --test-threads=1'
 
   windows-check:
     name: Windows core and WinUI
@@ -92,7 +119,7 @@ jobs:
   plan:
     name: Plan release
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-    needs: [tooling, linux-check, windows-check]
+    needs: [tooling, linux-check, linux-cloud, windows-check]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -124,7 +151,7 @@ jobs:
     if: needs.plan.outputs.version != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    container: rust:1-slim-bookworm@sha256:ebd900bae66fd508b466cef82d64a83a5fb34682e4c8b2797a42908bddc95a57
+    container: rust:1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7
     env:
       RELEASE_VERSION: ${{ needs.plan.outputs.version }}
       CARGO_BUILD_JOBS: '2'
@@ -132,7 +159,7 @@ jobs:
       - name: Install packaging dependencies
         run: |
           apt-get update -qq
-          apt-get install -y --no-install-recommends git ca-certificates nodejs build-essential pkg-config libdbus-1-dev cmake ninja-build qt6-base-dev qt6-declarative-dev
+          apt-get install -y --no-install-recommends fuse3 libfuse3-dev libkf6kio-dev libkf6coreaddons-dev extra-cmake-modules qml6-module-org-kde-kirigami qml6-module-org-kde-desktop python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 python3-nautilus librsvg2-common qt6-svg-plugins git ca-certificates nodejs build-essential pkg-config libdbus-1-dev cmake ninja-build qt6-base-dev qt6-declarative-dev
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:

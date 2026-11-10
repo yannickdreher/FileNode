@@ -1,0 +1,438 @@
+#!/usr/bin/python3
+"""Native GTK 4/libadwaita frontend for the private Rust worker protocol."""
+import argparse
+from collections import deque
+import json
+import locale
+import os
+from pathlib import Path
+import sys
+
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")
+from gi.repository import Adw, Gio, GLib, Gtk
+
+
+class SettingsWindow(Adw.ApplicationWindow):
+    """A separate desktop settings window using current libadwaita controls."""
+    def __init__(self, application, parent, title):
+        super().__init__(application=application, transient_for=parent, title=title, default_width=840, default_height=760)
+        self.set_hide_on_close(True)
+        self.set_size_request(700, 500)
+        self.stack = Adw.ViewStack()
+        switcher = Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE)
+        header = Adw.HeaderBar(title_widget=switcher)
+        toolbar = Adw.ToolbarView(content=self.stack)
+        toolbar.add_top_bar(header); self.set_content(toolbar)
+
+    def add(self, page):
+        self.stack.add_titled_with_icon(page, str(len(list(self.stack.get_pages()))), page.get_title(), page.get_icon_name())
+
+    def set_visible_page(self, page): self.stack.set_visible_child(page)
+    def present(self, parent=None): super().present()
+    def force_close(self): self.destroy()
+
+
+class FileNode(Adw.Application):
+    def __init__(self, options):
+        super().__init__(application_id="io.github.yannickdreher.FileNode")
+        self.options = options
+        self.directory = Path(__file__).resolve().parent
+        self.catalogs = {code: json.loads((self.directory / "locales" / (code + ".json")).read_text()) for code in ("en", "de")}
+        self.config, self.folders, self.activities = {}, {}, {}
+        self.ready, self.running, self.updating, self.quitting = False, False, False, False
+        self.account, self.status, self.error, self.trash_url = "signed_out", "status.ready", "", ""
+        self.fields, self.toggles, self.numbers, self.activity_widgets = {}, {}, {}, {}
+        self.translated_buttons = []
+        self.commands, self.writing = deque(), False
+        self.held, self.window, self.preferences, self.process = False, None, None, None
+        self.connect("activate", self.activate)
+        self.connect("shutdown", self.shutdown)
+        self.add_action(self.action("quit", self.quit_worker))
+        self.add_action(self.action("settings", self.show_settings))
+
+    def action(self, name, callback):
+        action = Gio.SimpleAction.new(name, None)
+        action.connect("activate", lambda *_: callback())
+        return action
+
+    def t(self, key):
+        language = self.config.get("language", "auto")
+        if language == "auto":
+            language = "de" if (locale.getlocale()[0] or "en").startswith("de") else "en"
+        return self.catalogs.get(language, self.catalogs["en"]).get(key, self.catalogs["en"].get(key, key))
+
+    def send(self, command):
+        if self.process and not self.quitting:
+            data = (json.dumps(command, ensure_ascii=False) + "\n").encode()
+            if len(data) > 1024 * 1024 or len(self.commands) >= 64:
+                self.error = self.t("error.command_queue"); self.refresh(); return
+            self.commands.append(data)
+            self.write_next()
+
+    def write_next(self):
+        if self.writing or not self.commands: return
+        self.writing = True
+        self.process.get_stdin_pipe().write_all_async(self.commands[0], GLib.PRIORITY_DEFAULT, None, self.write_done)
+
+    def write_done(self, stream, result):
+        self.writing = False
+        try: stream.write_all_finish(result)
+        except GLib.Error as error:
+            self.commands.clear(); self.error = str(error); self.refresh(); return
+        self.commands.popleft(); self.write_next()
+
+    def apply(self, patch, connect=False, password="", interactive=False):
+        self.send({"command": "configure", "patch": patch, "connect": connect, "password": password, "interactive": interactive})
+
+    def activate(self, *_):
+        if self.window:
+            self.window.present()
+            return
+        self.hold()
+        self.held = True
+        self.window = Adw.ApplicationWindow(application=self, title="FileNode", default_width=440, default_height=660)
+        Gtk.Window.set_default_icon_name("io.github.yannickdreher.FileNode")
+        self.window.connect("close-request", lambda *_: self.hide_window())
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        settings = Gtk.Button(icon_name="emblem-system-symbolic", tooltip_text=self.t("tray.settings"))
+        settings.connect("clicked", lambda *_: self.show_settings())
+        header.pack_end(settings)
+        toolbar.add_top_bar(header)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_start=20, margin_end=20, margin_bottom=16)
+        self.account_label = Gtk.Label(xalign=0, wrap=True)
+        self.status_label = Gtk.Label(xalign=0, wrap=True)
+        box.append(self.account_label)
+        box.append(self.status_label)
+        self.folder_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
+        box.append(self.folder_list)
+        self.activity_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE, css_classes=["boxed-list"])
+        scroll = Gtk.ScrolledWindow(vexpand=True, child=self.activity_list)
+        box.append(scroll)
+        buttons = Gtk.Box(spacing=8, homogeneous=True)
+        for key, callback in [("action.open", self.open_folder), ("action.online", self.open_online), ("action.trash", self.open_trash)]:
+            button = Gtk.Button(label=self.t(key)); button.connect("clicked", lambda _, callback=callback: callback()); buttons.append(button)
+            self.translated_buttons.append((button, key))
+        box.append(buttons)
+        self.pause_button = Gtk.Button(label=self.t("action.pause"))
+        self.pause_button.connect("clicked", lambda *_: self.send({"command": "pause" if self.running else "connect"}))
+        box.append(self.pause_button)
+        quit_button = Gtk.Button(label=self.t("tray.quit"))
+        quit_button.connect("clicked", lambda *_: self.quit_worker()); box.append(quit_button)
+        self.translated_buttons.append((quit_button, "tray.quit"))
+        toolbar.set_content(box); self.window.set_content(toolbar)
+        self.refresh()
+        if self.options.self_test:
+            GLib.timeout_add(1600, self.smoke)
+        core = self.options.core or str(self.directory / "filenode-core")
+        arguments = [core, "--service", "--gui-executable", str(self.directory / "filenode-ui")]
+        if self.options.config: arguments += ["--config", self.options.config]
+        try:
+            self.process = Gio.Subprocess.new(arguments, Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_PIPE)
+        except GLib.Error as error:
+            self.error = str(error); self.refresh(); self.window.present()
+            return
+        self.output = Gio.DataInputStream.new(self.process.get_stdout_pipe())
+        self.output.read_line_async(GLib.PRIORITY_DEFAULT, None, self.receive)
+        self.process.wait_async(None, self.worker_exited)
+        self.monitor = Gio.PowerProfileMonitor.dup_default()
+        self.monitor.connect("notify::power-saver-enabled", lambda *_: self.publish_power())
+        Gio.bus_get(Gio.BusType.SYSTEM, None, self.power_bus)
+        if not self.options.background or self.options.no_tray: self.window.present()
+        if self.options.settings: self.show_settings()
+
+    def hide_window(self):
+        self.window.set_visible(False)
+        return True
+
+    def power_bus(self, _, result):
+        try:
+            self.system_bus = Gio.bus_get_finish(result)
+            self.system_bus.signal_subscribe("org.freedesktop.login1", "org.freedesktop.login1.Manager", "PrepareForSleep", "/org/freedesktop/login1", None, Gio.DBusSignalFlags.NONE,
+                lambda *args: self.publish_power(args[-2].unpack()[0]))
+        except GLib.Error:
+            pass
+        self.publish_power()
+
+    def publish_power(self, sleeping=False):
+        self.send({"command": "power", "saver": self.monitor.get_power_saver_enabled(), "sleeping": sleeping, "available": hasattr(self, "system_bus")})
+
+    def worker_exited(self, process, result):
+        try: process.wait_finish(result)
+        except GLib.Error: pass
+        if self.quitting:
+            self.quit()
+        else:
+            self.ready, self.running, self.account = False, False, "failed"
+            self.error = self.t("error.worker_stopped")
+            self.refresh(); self.window.present()
+
+    def receive(self, source, result):
+        try:
+            line, _ = source.read_line_finish_utf8(result)
+            if line is None: return
+            if len(line) > 16 * 1024 * 1024: raise ValueError("Worker response exceeds limit")
+            event = json.loads(line)
+            kind = event.get("event")
+            changed = "config" in event
+            old_language = self.config.get("language", "auto")
+            if changed: self.config = event["config"]
+            if changed and self.preferences and self.config.get("language", "auto") != old_language:
+                self.preferences.force_close(); self.preferences = None
+                self.build_settings(); self.preferences.present(self.window)
+            if kind == "ready":
+                if event.get("protocol") != 4: raise ValueError("Incompatible Rust worker protocol")
+                self.ready = True
+                self.publish_power()
+                if self.config.get("username"): self.send({"command": "connect"})
+            elif kind == "configured": self.error = ""
+            elif kind == "running": self.running = event["value"]
+            elif kind == "status": self.status = event["key"]
+            elif kind == "account":
+                self.account = event["state"]
+                self.trash_url = event.get("trash_url", self.trash_url)
+                if self.account == "signed_out": self.activities.clear(); self.folders.clear()
+            elif kind == "folder":
+                self.folders[event["folder"]] = event
+                if event.get("state") == "current":
+                    for (folder, _), entry in self.activities.items():
+                        if folder == event["folder"] and entry.get("state") in ("waiting", "checking", "retrying", "paused", "auth_required"):
+                            entry["state"] = "synced"
+            elif kind in ("file", "file_limit"):
+                if kind == "file_limit": event.update(state="too_large", total=event["size"], completed=0)
+                identity = (event["folder"], event["path"])
+                self.activities[identity] = event
+                if len(self.activities) > 100: self.activities.pop(next(iter(self.activities)))
+            elif kind == "renamed":
+                for identity in list(self.activities):
+                    folder, path = identity
+                    if folder == event["folder"] and (path == event["from"] or path.startswith(event["from"] + "/")):
+                        entry = self.activities.pop(identity); entry["path"] = event["to"] + path[len(event["from"]):]; self.activities[(folder, entry["path"])] = entry
+            elif kind in ("error", "retry"): self.error = event.get("details", ""); changed = True
+            elif kind == "report": self.error = ""
+            elif kind == "open_browser": self.open_url(event["url"])
+            self.refresh(changed)
+        except (GLib.Error, ValueError, KeyError) as error:
+            self.error = str(error); self.refresh()
+        if not self.quitting: source.read_line_async(GLib.PRIORITY_DEFAULT, None, self.receive)
+
+    def row(self, title, subtitle=""):
+        row = Adw.ActionRow(title=title, subtitle=subtitle)
+        row.set_use_markup(False)
+        return row
+
+    def clear(self, widget):
+        child = widget.get_first_child()
+        while child:
+            following = child.get_next_sibling(); widget.remove(child); child = following
+
+    def refresh(self, changed=False):
+        if not self.window: return
+        self.account_label.set_label(self.t("account." + self.account) + (" · " + self.config.get("username", "") if self.account == "signed_in" else ""))
+        self.status_label.set_label(self.error or self.t(self.status))
+        self.pause_button.set_label(self.t("action.pause" if self.running else "action.start"))
+        self.pause_button.set_sensitive(self.ready)
+        for button, key in self.translated_buttons: button.set_label(self.t(key))
+        if self.preferences:
+            self.signin.set_sensitive(self.ready and self.account != "checking")
+            self.signin.set_label(self.t("account.checking" if self.account == "checking" else "account.signin_again" if self.account == "signed_in" else "action.signin"))
+        self.clear(self.folder_list)
+        for folder in self.config.get("sync_folders", []):
+            path = folder["local_folder"]; status = self.folders.get(path, {})
+            state = "not_connected" if self.account != "signed_in" else "paused" if not self.running else status.get("state", "checking")
+            self.folder_list.append(self.row(Path(path).name, self.t("folder." + state)))
+        self.clear(self.activity_list)
+        for (_, path), entry in reversed(list(self.activities.items())):
+            state = entry.get("state", "checking")
+            if state == "transferring": state = "uploading" if entry.get("operation") == "upload" else "downloading"
+            text = self.t("activity." + ("trashed" if state == "synced" and entry.get("operation") == "trash" else state))
+            if state == "too_large":
+                text = text.replace("{size}", self.format_bytes(entry.get("total", 0))).replace("{limit}", self.format_bytes(entry.get("limit", 0)))
+            row = self.row(Path(path).name, text)
+            if entry.get("state") == "transferring":
+                row.add_suffix(Gtk.ProgressBar(fraction=min(1.0, entry.get("completed", 0) / max(1, entry.get("total", 0))), valign=Gtk.Align.CENTER, width_request=100))
+            self.activity_list.append(row)
+        if changed and self.preferences: self.refresh_settings()
+
+    def show_settings(self):
+        if not self.preferences: self.build_settings()
+        self.preferences.present(self.window)
+
+    def build_settings(self):
+        self.fields, self.toggles, self.numbers, self.folder_rows = {}, {}, {}, []
+        self.preferences = SettingsWindow(self, self.window, "FileNode — " + self.t("tray.settings"))
+        self.pages = {}
+        for name, icon in [("sync", "view-refresh-symbolic"), ("account", "avatar-default-symbolic"), ("general", "preferences-system-symbolic"), ("about", "help-about-symbolic")]:
+            page = Adw.PreferencesPage(title=self.t("settings." + name), icon_name=icon)
+            self.preferences.add(page); self.pages[name] = page
+        self.folder_group = Adw.PreferencesGroup(title=self.t("settings.folders"), description=self.t("settings.linux_cloud_hint"))
+        self.pages["sync"].add(self.folder_group)
+        add = Gtk.Button(label=self.t("settings.add_folder"), valign=Gtk.Align.CENTER)
+        add.connect("clicked", lambda *_: self.choose_folder(False))
+        cloud_add = Gtk.Button(label=self.t("settings.add_cloud_folder"), valign=Gtk.Align.CENTER)
+        cloud_add.connect("clicked", lambda *_: self.choose_folder(True))
+        add_buttons = Gtk.Box(spacing=6); add_buttons.append(add); add_buttons.append(cloud_add)
+        add_buttons.set_halign(Gtk.Align.END)
+        self.folder_group.add(add_buttons)
+        rules = Adw.PreferencesGroup(title=self.t("settings.advanced")); self.pages["sync"].add(rules)
+        self.switch(rules, "propagate_deletes", "settings.deletes")
+        self.switch(rules, "pause_on_power_saver", "settings.pause_power")
+        self.number(rules, "parallel_uploads", "settings.parallel_uploads", 1, 16)
+        self.number(rules, "max_file_bytes", "settings.max_file_size", 0, 16777216, 1048576)
+        self.number(rules, "upload_limit_kib", "settings.upload_limit", 0, 1000000)
+        self.number(rules, "download_limit_kib", "settings.download_limit", 0, 1000000)
+        self.number(rules, "interval_seconds", "settings.interval", 5, 86400)
+        self.number(rules, "full_scan_seconds", "settings.full_scan", 60, 86400)
+        exclusions = Adw.PreferencesGroup(title=self.t("settings.exclusions"), description=self.t("settings.exclusions_hint")); self.pages["sync"].add(exclusions)
+        self.exclusions = Gtk.TextView(monospace=True, top_margin=10, bottom_margin=10, left_margin=10, right_margin=10)
+        exclusions.add(Gtk.ScrolledWindow(min_content_height=150, child=self.exclusions))
+        save = Gtk.Button(label=self.t("settings.save")); save.connect("clicked", lambda *_: self.save_exclusions()); exclusions.add(save)
+        account = Adw.PreferencesGroup(title=self.t("settings.account")); self.pages["account"].add(account)
+        for field, key in [("server", "settings.server"), ("web_url", "settings.web"), ("username", "settings.username")]: self.field(account, field, key)
+        self.auth = Adw.ComboRow(title=self.t("settings.authentication"), model=Gtk.StringList.new([self.t("settings.auth_password"), self.t("settings.auth_browser")]))
+        self.auth.connect("notify::selected", lambda *_: self.auth_visibility()); account.add(self.auth)
+        self.password = Adw.PasswordEntryRow(title=self.t("settings.password")); account.add(self.password)
+        for field, key in [("oauth_issuer", "settings.oauth_issuer"), ("oauth_client_id", "settings.oauth_client"), ("oauth_scopes", "settings.oauth_scopes")]: self.field(account, field, key)
+        self.number(account, "oauth_redirect_port", "settings.oauth_port", 0, 65535, account=True)
+        self.signin = Gtk.Button(label=self.t("action.signin"), css_classes=["suggested-action"])
+        self.signin.connect("clicked", lambda *_: self.sign_in()); account.add(self.signin)
+        general = Adw.PreferencesGroup(); self.pages["general"].add(general)
+        self.switch(general, "autostart", "settings.autostart")
+        self.language = Adw.ComboRow(title=self.t("language.label"), model=Gtk.StringList.new([self.t("language.auto"), "English", "Deutsch"]))
+        self.language.connect("notify::selected", lambda *_: None if self.updating else self.apply({"language": ["auto", "en", "de"][self.language.get_selected()]})); general.add(self.language)
+        about = Adw.PreferencesGroup(title="FileNode", description=self.t("about.description")); self.pages["about"].add(about)
+        about.add(self.row("GTK 4 · libadwaita", self.t("settings.gnome_background_hint")))
+        project = Gtk.Button(label=self.t("about.project")); project.connect("clicked", lambda *_: self.open_url("https://github.com/yannickdreher/FileNode")); about.add(project)
+        self.settings_error = Gtk.Label(wrap=True, selectable=True, xalign=0)
+        errors = Adw.PreferencesGroup(); errors.add(self.settings_error); self.pages["sync"].add(errors)
+        self.refresh_settings()
+
+    def field(self, group, field, key):
+        row = Adw.EntryRow(title=self.t(key)); self.fields[field] = row; group.add(row)
+
+    def switch(self, group, field, key):
+        row = Adw.SwitchRow(title=self.t(key)); group.add(row); self.toggles[field] = row
+        row.connect("notify::active", lambda *_: None if self.updating else self.apply({field: row.get_active()}))
+
+    def number(self, group, field, key, minimum, maximum, scale=1, account=False):
+        row = Adw.SpinRow.new_with_range(minimum, maximum, 1); row.set_title(self.t(key)); group.add(row); self.numbers[field] = (row, scale)
+        if not account: row.connect("notify::value", lambda *_: None if self.updating else self.apply({field: round(row.get_value()) * scale}))
+
+    def refresh_settings(self):
+        self.updating = True
+        for field, row in self.fields.items(): row.set_text(str(self.config.get(field, "")))
+        for field, row in self.toggles.items(): row.set_active(bool(self.config.get(field, False)))
+        for field, (row, scale) in self.numbers.items(): row.set_value(self.config.get(field, 0) / scale)
+        self.auth.set_selected(1 if self.config.get("auth_mode") == "browser" else 0)
+        self.auth_visibility()
+        self.language.set_selected({"en": 1, "de": 2}.get(self.config.get("language"), 0))
+        self.exclusions.get_buffer().set_text("\n".join(self.config.get("exclude_patterns", [])))
+        self.settings_error.set_label(self.error)
+        for row in getattr(self, "folder_rows", []): self.folder_group.remove(row)
+        self.folder_rows = []
+        for index, folder in enumerate(self.config.get("sync_folders", [])):
+            path = folder["local_folder"]
+            row = Adw.ExpanderRow(title=path, subtitle=self.t("settings.folder_target") + ": /" + folder.get("remote_path", "")); row.set_use_markup(False)
+            cloud = Adw.SwitchRow(title=self.t("settings.linux_files_on_demand"), active=folder.get("files_on_demand", False))
+            cloud.connect("notify::active", lambda widget, _, index=index: self.set_folder_mode(index, widget.get_active())); row.add_row(cloud)
+            buttons = self.row(self.t("settings.folder_actions"))
+            for key, callback in [("action.open", lambda path=path: self.open_url(Gio.File.new_for_path(path).get_uri())), ("settings.remove_folder", lambda index=index: self.remove_folder(index))]:
+                button = Gtk.Button(label=self.t(key), valign=Gtk.Align.CENTER); button.connect("clicked", lambda _, callback=callback: callback()); buttons.add_suffix(button)
+            row.add_row(buttons)
+            details = self.folders.get(path, {}).get("details", "")
+            if details: row.add_row(self.row(self.t("error.details"), details))
+            self.folder_group.add(row); self.folder_rows.append(row)
+        self.signin.set_sensitive(self.ready and self.account != "checking")
+        self.updating = False
+
+    def auth_visibility(self):
+        browser = self.auth.get_selected() == 1
+        self.password.set_visible(not browser)
+        for field in ("oauth_issuer", "oauth_client_id", "oauth_scopes"): self.fields[field].set_visible(browser)
+        self.numbers["oauth_redirect_port"][0].set_visible(browser)
+
+    def sign_in(self):
+        patch = {field: row.get_text() for field, row in self.fields.items()}
+        patch.update(auth_mode="browser" if self.auth.get_selected() == 1 else "app_password", oauth_redirect_port=round(self.numbers["oauth_redirect_port"][0].get_value()))
+        self.apply(patch, True, "" if self.auth.get_selected() == 1 else self.password.get_text(), self.auth.get_selected() == 1)
+        self.password.set_text("")
+
+    def save_exclusions(self):
+        buffer = self.exclusions.get_buffer(); text = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), False)
+        self.apply({"exclude_patterns": [line.strip() for line in text.splitlines() if line.strip()]})
+
+    def format_bytes(self, count):
+        for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+            if count < 1024 or unit == "TiB": return f"{count:.2f} {unit}"
+            count /= 1024
+
+    def set_folder_mode(self, index, active):
+        if self.updating: return
+        folders = [dict(folder) for folder in self.config.get("sync_folders", [])]; folders[index]["files_on_demand"] = active
+        self.apply({"sync_folders": folders})
+
+    def remove_folder(self, index):
+        folders = list(self.config.get("sync_folders", [])); folders.pop(index); self.apply({"sync_folders": folders})
+
+    def choose_folder(self, cloud=False):
+        self.add_cloud = cloud
+        dialog = Gtk.FileDialog(title=self.t("settings.add_folder"))
+        dialog.select_folder(self.preferences, None, self.folder_selected)
+
+    def folder_selected(self, dialog, result):
+        try:
+            folder = dialog.select_folder_finish(result)
+            if folder and folder.get_path(): self.apply({"sync_folders": self.config.get("sync_folders", []) + [{"local_folder": folder.get_path(), "remote_path": "", "files_on_demand": self.add_cloud}]}, self.account == "signed_in")
+        except GLib.Error: pass
+
+    def open_folder(self):
+        folders = self.config.get("sync_folders", [])
+        if len(folders) == 1: self.open_url(Gio.File.new_for_path(folders[0]["local_folder"]).get_uri())
+        else: self.show_settings()
+
+    def open_online(self): self.open_url(self.config.get("web_url", ""))
+    def open_trash(self): self.open_url(self.trash_url or self.config.get("web_url", ""))
+    def open_url(self, uri):
+        from urllib.parse import urlsplit
+        parsed = urlsplit(uri)
+        if parsed.scheme in ("https", "file") and not parsed.username and not parsed.password:
+            try: Gio.AppInfo.launch_default_for_uri(uri, None)
+            except GLib.Error as error: self.error = str(error); self.refresh()
+
+    def quit_worker(self):
+        self.send({"command": "quit"}); self.quitting = True
+        if not self.process: self.quit()
+
+    def shutdown(self, *_):
+        if self.held: self.release(); self.held = False
+
+    def smoke(self):
+        self.show_settings()
+        if self.options.self_test_account: self.preferences.set_visible_page(self.pages["account"])
+        GLib.timeout_add(500, self.smoke_finish)
+        return False
+
+    def smoke_finish(self):
+        import shutil
+        import subprocess
+        directory = Path(self.options.self_test); directory.mkdir(parents=True, exist_ok=True)
+        (directory / "gnome-smoke.json").write_text(json.dumps({"ready": self.ready, "folders": len(self.config.get("sync_folders", [])), "frontend": "GTK4/libadwaita", "error": self.error}))
+        if shutil.which("import"):
+            subprocess.run(["import", "-window", "root", str(directory / "gnome-settings.png")], check=True, timeout=5)
+        self.quit_worker()
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(description="FileNode GNOME")
+    parser.add_argument("--core"); parser.add_argument("--config"); parser.add_argument("--background", action="store_true")
+    parser.add_argument("--settings", action="store_true"); parser.add_argument("--no-tray", action="store_true")
+    parser.add_argument("--self-test"); parser.add_argument("--self-test-account", action="store_true")
+    options = parser.parse_args()
+    return FileNode(options).run([sys.argv[0]])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

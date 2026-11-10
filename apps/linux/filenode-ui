@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+executable=$(readlink -f -- "$0")
+directory=$(CDPATH= cd -- "$(dirname -- "$executable")" && pwd)
+case "${FILENODE_DESKTOP:-${XDG_CURRENT_DESKTOP:-KDE}}" in
+    *GNOME*|*Gnome*|gnome|*Unity*) exec "$directory/filenode-gnome" "$@" ;;
+    *) exec "$directory/filenode-kde" "$@" ;;
+esac

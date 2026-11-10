@@ -2,13 +2,13 @@
 
 English · [Deutsch](README.de.md) · [Website](https://yannickdreher.github.io/FileNode/) · [Downloads](https://github.com/yannickdreher/FileNode/releases)
 
-A JMAP Files synchronization client for Windows and Linux. The shared synchronization engine is Rust. Windows has a dedicated **WinUI 3/C#** frontend; Linux has a separate **Qt 6/C++/QML** frontend. UI text is English and German; code and technical diagnostics are English. The 0.x versions are previews.
+A JMAP Files synchronization client for Windows and Linux. The shared engine is Rust. Windows uses **WinUI 3/C#**, GNOME **GTK 4/libadwaita**, and KDE **Qt 6/Kirigami**. UI text is English and German; code and technical diagnostics are English. The 0.x versions are previews.
 
 ## Desktop behavior
 
-The application runs in the signed-in user's session with a tray icon, a compact activity window and a separate settings window. Closing a window keeps synchronization running. Quit stops the application and its Rust worker. No Windows system service or systemd unit is required or installed. Linux needs a StatusNotifier host; GNOME may require an AppIndicator extension. Without a tray, keep the status window open or minimized.
+The application runs in the signed-in user's session. Closing a window keeps synchronization running. Quit stops the application and its Rust worker. Windows and KDE provide a tray; GNOME reopens through its application launcher. No Windows system service or systemd unit is installed.
 
-Both frontends share `locales/en.json` and `locales/de.json`, the configuration format, OS credential storage and all sync decisions. Linux uses KDE desktop controls when Qt's KDE style/integration packages are available, and otherwise system Qt styling. It does not provide GTK/libadwaita controls on GNOME.
+All frontends share `locales/en.json` and `locales/de.json`, the profile format, OS credential storage and sync decisions. The Linux launcher selects GTK/libadwaita on GNOME and Kirigami on KDE. [Linux setup, FUSE lifecycle and file-manager extensions](docs/linux-cloud-files.md).
 
 ## Features
 
@@ -51,7 +51,7 @@ powershell.exe -NoProfile -File scripts/build-windows.ps1
 powershell.exe -NoProfile -File scripts/build-windows.ps1 -Configuration Release -Package
 ```
 
-Linux, with Qt 6.4+ development/runtime modules and a compiler:
+Linux, with the GTK/libadwaita, Kirigami/KF6 and FUSE dependencies listed in [Linux setup](docs/linux-cloud-files.md):
 
 ```sh
 sh scripts/build-linux.sh
@@ -82,7 +82,7 @@ Cloud mode shares the external per-user folder store with full synchronization; 
 
 ## Limits and recovery
 
-This is a preview with optional Windows Files On-Demand in dedicated NTFS roots outside other cloud providers; Linux keeps complete local files. It is not a complete OneDrive replacement. Block-level upload deltas, arbitrary-offset upload resumption, selective sync, multiple-account UI, conflict/restore UI, signed releases and automatic updates remain open. Blob uploads can run in parallel; full-file downloads and FileNode commits remain serial, while Windows hydration requests can run concurrently. Automatic upload limits use server discovery, with a 1 GiB fallback only when unavailable. Other limits include 100,000 entries, 200 UTF-8 bytes per filename and 240 per relative path. Unsafe links, foreign reparse points, unsafe names and case/normalization collisions stop scanning. Permissions, ownership, ACLs, alternate streams and timestamps are not synchronized. Case-only renames are not reliably supported.
+This is a preview with optional Windows Files On-Demand in dedicated NTFS roots outside other cloud providers; Linux additionally provides FUSE Files On-Demand with native Nautilus/Dolphin extensions; see [its mount lifecycle](docs/linux-cloud-files.md). It is not a complete OneDrive replacement. Block-level upload deltas, arbitrary-offset upload resumption, selective sync, multiple-account UI, conflict/restore UI, signed releases and automatic updates remain open. Blob uploads can run in parallel; full-file downloads and FileNode commits remain serial, while Windows and Linux hydration requests can run concurrently. Automatic upload limits use server discovery, with a 1 GiB fallback only when unavailable. Other limits include 100,000 entries, 200 UTF-8 bytes per filename and 240 per relative path. Unsafe links, foreign reparse points, unsafe names and case/normalization collisions stop scanning. Permissions, ownership, ACLs, alternate streams and timestamps are not synchronized. Case-only renames are not reliably supported.
 
 The complete namespace is still enumerated; cached hashes reduce content reads, not directory-walk complexity. Watcher loss, manual checks, reconnects and periodic verification rehash contents. Settling and locks reduce races but cannot prove that every application has finished writing. Unix locks are advisory. Payload caps exclude TLS/HTTP overhead and socket buffering. [Architecture](docs/architecture.md) describes these boundaries and acceptance work.
 

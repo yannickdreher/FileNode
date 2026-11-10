@@ -2,8 +2,9 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import org.kde.kirigami as Kirigami
 
-ApplicationWindow {
+Kirigami.ApplicationWindow {
     id: statusWindow
     objectName: "statusWindow"
     title: "FileNode"
@@ -93,7 +94,7 @@ ApplicationWindow {
         }
     }
 
-    ApplicationWindow {
+    Kirigami.ApplicationWindow {
         id: settings
         objectName: "settingsWindow"
         title: "FileNode — " + statusWindow.t("tray.settings")
@@ -154,6 +155,18 @@ ApplicationWindow {
                                         anchors.fill: parent
                                         Label { text: modelData.local_folder; font.bold: true; wrapMode: Text.Wrap; Layout.fillWidth: true }
                                         Label { text: statusWindow.t("settings.folder_target") + ": /" + modelData.remote_path; wrapMode: Text.Wrap; Layout.fillWidth: true }
+                                        Switch {
+                                            id: folderCloudMode
+                                            text: statusWindow.t("settings.linux_files_on_demand")
+                                            checked: modelData.files_on_demand === true
+                                            enabled: App.ready && App.accountState !== "checking"
+                                            onClicked: { let next = App.config.sync_folders.slice(); next[index] = Object.assign({}, next[index], {files_on_demand:checked}); App.apply({sync_folders:next}) }
+                                            Connections {
+                                                target: App
+                                                function onConfigChanged() { let folders = App.config.sync_folders || []; if (index < folders.length) folderCloudMode.checked = folders[index].files_on_demand === true }
+                                            }
+                                        }
+                                        Label { visible: modelData.files_on_demand === true; text: statusWindow.t("settings.linux_cloud_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                                         Label { text: { let states = App.folderStatuses; let running = App.running; let account = App.accountState; let power = App.powerPaused; return App.folderStatus(modelData.local_folder) } wrapMode: Text.Wrap; Layout.fillWidth: true }
                                         Label { visible: folderError.text.length > 0; text: statusWindow.t("error.details"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                                         TextArea {
@@ -171,7 +184,10 @@ ApplicationWindow {
                                     }
                                 }
                             }
-                            Button { text: statusWindow.t("settings.add_folder"); enabled: App.ready && App.accountState !== "checking"; onClicked: folderDialog.open() }
+                            RowLayout {
+                                Button { text: statusWindow.t("settings.add_folder"); enabled: App.ready && App.accountState !== "checking"; onClicked: { folderDialog.cloud = false; folderDialog.open() } }
+                                Button { text: statusWindow.t("settings.add_cloud_folder"); enabled: App.ready && App.accountState !== "checking"; onClicked: { folderDialog.cloud = true; folderDialog.open() } }
+                            }
                             Label { text: statusWindow.t("settings.stop_hint"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Switch { id: deletes; text: statusWindow.t("settings.deletes"); checked: App.config.propagate_deletes || false; enabled: App.ready && App.accountState !== "checking"; Layout.fillWidth: true }
                             GroupBox { title: statusWindow.t("settings.exclusions"); Layout.fillWidth: true
@@ -252,7 +268,7 @@ ApplicationWindow {
                             spacing: 18
                             Label { text: statusWindow.t("about.description"); wrapMode: Text.Wrap; Layout.fillWidth: true }
                             Label { text: statusWindow.t("about.limits"); wrapMode: Text.Wrap; Layout.fillWidth: true }
-                            Label { text: "Qt Quick Controls · " + App.style }
+                            Label { text: "KDE Kirigami · " + App.style }
                             Button { text: statusWindow.t("about.project"); onClicked: Qt.openUrlExternally("https://github.com/yannickdreher/FileNode") }
                         }
                     }
@@ -265,7 +281,7 @@ ApplicationWindow {
                 }
             }
         }
-        FolderDialog { id: folderDialog; onAccepted: { let next = (App.config.sync_folders || []).slice(); next.push({local_folder:App.localPath(selectedFolder),remote_path:""}); App.apply({sync_folders:next}, App.authenticated) } }
+        FolderDialog { id: folderDialog; property bool cloud: false; onAccepted: { let next = (App.config.sync_folders || []).slice(); next.push({local_folder:App.localPath(selectedFolder),remote_path:"",files_on_demand:cloud}); App.apply({sync_folders:next}, App.authenticated) } }
     }
     Connections {
         target: App

@@ -36,9 +36,10 @@ device_name = "Desktop"
 # Each selection uses its own final folder name at the server root. Overlapping roots are rejected.
 [[sync_folders]]
 local_folder = "/home/user/Desktop" # Windows: 'C:\Users\user\Desktop'
-# Windows only: enable on each dedicated NTFS root outside other cloud providers.
-# Adds Explorer placeholders, availability status and native pin/free-space menus.
-# Other selections can remain fully local. See docs/cloud-files.md.
+# Windows: dedicated NTFS root outside other cloud providers; docs/cloud-files.md.
+# Linux: empty dedicated FUSE mount; docs/linux-cloud-files.md.
+# Adds online-only files and native availability/keep/free-space actions.
+# Other selections can remain fully local.
 files_on_demand = false
 
 [[sync_folders]]

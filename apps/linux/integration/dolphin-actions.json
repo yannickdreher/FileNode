@@ -1,0 +1,12 @@
+{
+  "KPlugin": {
+    "Name": "FileNode",
+    "Description": "Keep files offline or release local cache space",
+    "Description[de]": "Dateien offline behalten oder lokalen Speicher freigeben",
+    "Icon": "folder-remote",
+    "EnabledByDefault": true
+  },
+  "MimeType": ["application/octet-stream", "inode/directory"],
+  "X-KDE-Protocol": "file",
+  "X-KDE-ServiceTypes": ["KFileItemAction/Plugin"]
+}

@@ -140,11 +140,11 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     if next.sync_folders != config.sync_folders {
                         next.normalize_folders(&config)?;
                     }
-                    #[cfg(windows)]
+                    #[cfg(any(windows, target_os = "linux"))]
                     let cloud_removed = filenode::cloud::removed_roots(&config, &next)?;
-                    #[cfg(not(windows))]
+                    #[cfg(not(any(windows, target_os = "linux")))]
                     if next.has_cloud_folders() {
-                        bail!("Files On-Demand requires Windows");
+                        bail!("Files On-Demand requires Windows or Linux");
                     }
                     if next.upload_limit_kib > 1_000_000
                         || next.download_limit_kib > 1_000_000
@@ -176,11 +176,11 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                     // any replacement can touch the same folder databases or files.
                     // Cloud roots must be detached while their old settings are
                     // still durable. Never persist a profile that orphans data.
-                    #[cfg(windows)]
+                    #[cfg(any(windows, target_os = "linux"))]
                     if cloud_removed.is_empty() {
                         next.save(&path)?;
                     }
-                    #[cfg(not(windows))]
+                    #[cfg(not(any(windows, target_os = "linux")))]
                     next.save(&path)?;
                     if restart {
                         policy.cancel.store(true, Ordering::Relaxed);
@@ -188,7 +188,7 @@ pub fn run(path: PathBuf, gui: Option<PathBuf>, external_autostart: bool) -> Res
                             let _ = previous.join();
                         }
                     }
-                    #[cfg(windows)]
+                    #[cfg(any(windows, target_os = "linux"))]
                     if !cloud_removed.is_empty() {
                         for root in &cloud_removed {
                             filenode::cloud::detach(root)?;
