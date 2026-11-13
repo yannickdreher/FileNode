@@ -61,6 +61,24 @@ fn sync_directory(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn remove_verified_directory(path: &Path) -> Result<()> {
+    // OneDrive can mark even empty legacy directories read-only. Windows
+    // refuses RemoveDirectory in that case, after recovery has already been
+    // copied and verified. Change only this directory's attribute, not ACLs.
+    #[cfg(windows)]
+    {
+        let mut permissions = fs::symlink_metadata(path)?.permissions();
+        if permissions.readonly() {
+            // This Windows-only operation clears an attribute, not Unix mode bits.
+            #[allow(clippy::permissions_set_readonly_false)]
+            permissions.set_readonly(false);
+            fs::set_permissions(path, permissions)
+                .with_context(|| format!("Clear read-only attribute on {}", path.display()))?;
+        }
+    }
+    fs::remove_dir(path).with_context(|| format!("Remove verified directory {}", path.display()))
+}
+
 fn consistent_copy(db: &Connection, target: &Path) -> Result<()> {
     let staged = tempfile::NamedTempFile::new_in(target.parent().context("Database parent")?)?
         .into_temp_path();
@@ -248,7 +266,7 @@ fn migrate_from(destination: &Path, paths: &[PathBuf], identity: &str) -> Result
                 fs::remove_file(path)?;
             }
         }
-        fs::remove_dir(&source.path).context("Remove migrated internal directory")?;
+        remove_verified_directory(&source.path)?;
     }
     Ok(())
 }
@@ -333,7 +351,7 @@ fn remove_tree_with_cloud(source: &Path, backup: &Path, allow_cloud: bool) -> Re
             remove_tree_with_cloud(&entry.path(), &backup.join(entry.file_name()), allow_cloud)?;
         }
         // Never recursively remove a tree: a newly created entry must survive.
-        fs::remove_dir(source)?;
+        remove_verified_directory(source)?;
     } else if meta.is_file() {
         let mut input = filesystem::open_snapshot(source)?;
         if filesystem::hash_snapshot(&mut input, u64::MAX)?
@@ -462,6 +480,45 @@ mod tests {
                 recovered.contains(&b"full".to_vec()) && recovered.contains(&b"cloud".to_vec())
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn migrates_read_only_legacy_directories_without_losing_recovery_data() {
+        let temp = tempfile::tempdir().unwrap();
+        let old = temp.path().join("sync/.filenode");
+        let new = temp.path().join("appdata");
+        fs::create_dir(&new).unwrap();
+        drop(seed(&old, "original", false));
+        for entry in walkdir::WalkDir::new(&old) {
+            let entry = entry.unwrap();
+            if entry.file_type().is_dir() {
+                let mut permissions = entry.metadata().unwrap().permissions();
+                permissions.set_readonly(true);
+                fs::set_permissions(entry.path(), permissions).unwrap();
+            }
+        }
+
+        migrate_from(&new, std::slice::from_ref(&old), "identity").unwrap();
+
+        assert!(!old.exists());
+        assert_eq!(generation(&new), "original");
+        let backup = fs::read_dir(new.join("history/migration"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let db = Connection::open(backup.join("database.sqlite")).unwrap();
+        assert_eq!(value(&db, "generation").unwrap().unwrap(), "original");
+        assert_eq!(
+            fs::read(backup.join("contents/history/previous/document.txt")).unwrap(),
+            b"original"
+        );
+        assert_eq!(
+            fs::read(backup.join("contents/transfers/blob.part")).unwrap(),
+            b"partial download"
+        );
     }
 
     #[test]
